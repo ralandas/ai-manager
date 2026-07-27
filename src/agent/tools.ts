@@ -5,6 +5,11 @@ import type { ToolSchema } from '../llm/types.js';
 import { getApartmentInfo } from '../frontend/apartments-info.js';
 import { apartmentPageUrl } from '../frontend/routes.js';
 import {
+  rememberBookingContact,
+  setCheckoutTime,
+  allBookingContacts,
+} from '../store/booking-contacts.js';
+import {
   assertAutonomyEnabled,
   audit,
   bookingIdempotencyKey,
@@ -106,6 +111,14 @@ export function buildTools(deps: {
           ...input,
         });
         session.lastBookingId = booking.id;
+        // Link the booking to this chat so we can DM the guest before checkout.
+        rememberBookingContact({
+          bookingId: booking.id,
+          chatId,
+          guestName: booking.guestName,
+          propertyId: booking.propertyId,
+          checkOut: booking.checkOut,
+        });
         audit('create_booking', { chatId, bookingId: booking.id, ...input });
         await notifyOwner(
           `🆕 Бронь ${booking.id}: ${booking.propertyId}, ${booking.checkIn}→${booking.checkOut}, ${booking.guests} гост., ${booking.totalPrice}. Гость: ${booking.guestName}`,
@@ -149,6 +162,33 @@ export function buildTools(deps: {
         const info = getApartmentInfo(id);
         if (!info) return { error: 'Для этой квартиры пока нет страницы с правилами' };
         return { url: apartmentPageUrl(id), title: info.title };
+      },
+    },
+    {
+      name: 'confirm_checkout_time',
+      description:
+        'Записать подтверждённое гостем время выезда (когда гость ответил на напоминание о выезде). Время в формате ЧЧ:ММ.',
+      parameters: {
+        type: 'object',
+        properties: {
+          time: { type: 'string', description: 'Время выезда ЧЧ:ММ, например 11:30' },
+        },
+        required: ['time'],
+      },
+      handler: async (a) => {
+        const time = a.time as string;
+        // Find this chat's most recent booking to attach the time to.
+        const mine = allBookingContacts()
+          .filter((c) => c.chatId === chatId)
+          .sort((x, y) => (x.checkOut < y.checkOut ? 1 : -1));
+        const target = mine[0];
+        if (!target) return { error: 'Не нашёл вашу бронь, чтобы записать время выезда' };
+        setCheckoutTime(target.bookingId, time);
+        audit('confirm_checkout_time', { chatId, bookingId: target.bookingId, time });
+        await notifyOwner(
+          `⏰ Гость подтвердил выезд ${target.checkOut} в ${time} — ${target.guestName} (${target.propertyId})`,
+        );
+        return { ok: true, bookingId: target.bookingId, time };
       },
     },
   ];

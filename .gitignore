@@ -14,6 +14,9 @@ data/pool.json
 data/*-state.json
 data/*.session
 
+# runtime state (guest contacts) — not content
+data/booking-contacts.json
+
 # logs
 *.log
 logs/

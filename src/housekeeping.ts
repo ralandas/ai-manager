@@ -2,11 +2,12 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import type { Messenger } from './messenger/types.js';
 import type { PmsConnector } from './pms/types.js';
+import { getBookingContact } from './store/booking-contacts.js';
 
 /**
- * Housekeeping: every evening, forecast tomorrow's checkouts and post a
- * prep list to the cleaners' chat. (Per-booking checkout confirmation dialog
- * will be added once the messenger flow for guests is stable.)
+ * Housekeeping: every evening the agent (a) DMs each guest checking out tomorrow
+ * to confirm their exact checkout time, and (b) posts the prep list — including
+ * any confirmed times — to the cleaners' chat.
  */
 export class Housekeeping {
   constructor(
@@ -19,6 +20,28 @@ export class Housekeeping {
     const d = new Date();
     d.setDate(d.getDate() + 1);
     return d.toISOString().slice(0, 10);
+  }
+
+  /**
+   * Day-before-checkout: DM each guest checking out tomorrow, asking for their
+   * exact departure time. The guest's reply is handled by the agent, which calls
+   * the confirm_checkout_time tool to record it (checkout is 12:00 by default).
+   */
+  async remindGuestsAboutCheckout(): Promise<void> {
+    const date = this.tomorrow();
+    const checkouts = await this.pms.getCheckouts(date);
+    for (const c of checkouts) {
+      const contact = getBookingContact(c.bookingId);
+      if (!contact?.chatId) {
+        logger.warn({ bookingId: c.bookingId }, 'checkout reminder: no chat for booking, skipping');
+        continue;
+      }
+      const text =
+        `Здравствуйте! Напоминаем, что завтра (${date}) у вас выезд из «${c.propertyTitle}». ` +
+        `Расчётный час — до 12:00. Подскажите, пожалуйста, во сколько примерно планируете выехать?`;
+      await this.messenger.sendMessage(contact.chatId, text);
+      logger.info({ bookingId: c.bookingId, chatId: contact.chatId }, 'checkout reminder sent');
+    }
   }
 
   async postTomorrowForecast(): Promise<void> {
@@ -37,9 +60,11 @@ export class Housekeeping {
       return;
     }
 
-    const lines = checkouts.map(
-      (c, i) => `${i + 1}. ${c.propertyTitle} — выезд ${c.checkOutDate} (гость: ${c.guestName})`,
-    );
+    const lines = checkouts.map((c, i) => {
+      const time = getBookingContact(c.bookingId)?.checkoutTime;
+      const when = time ? `выезд ~${time}` : `выезд до 12:00 (время не уточнено)`;
+      return `${i + 1}. ${c.propertyTitle} — ${when} (гость: ${c.guestName})`;
+    });
     const text = `🧹 Выезды на завтра (${date}) — ${checkouts.length}:\n${lines.join('\n')}\n\nПодготовьте квартиры к уборке.`;
     await this.messenger.sendMessage(config.HOUSEKEEPING_CHAT_ID, text);
     logger.info({ date, count: checkouts.length }, 'housekeeping: forecast posted');

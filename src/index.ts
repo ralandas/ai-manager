@@ -36,13 +36,19 @@ async function main() {
   agent = new Agent(llm, pms, messenger);
   await messenger.init();
 
-  // Nightly checkout forecast for the cleaners.
   const housekeeping = new Housekeeping(pms, messenger);
+  // Evening: DM guests to confirm tomorrow's exact checkout time...
+  scheduleDaily(18, () => housekeeping.remindGuestsAboutCheckout());
+  // ...then post the cleaners' prep list (with any confirmed times).
   scheduleDaily(21, () => housekeeping.postTomorrowForecast());
 
-  // Manual trigger for the forecast (useful for testing without waiting for 21:00).
+  // Manual triggers (test without waiting for the scheduled hour).
   app.post('/admin/forecast', async () => {
     await housekeeping.postTomorrowForecast();
+    return { ok: true };
+  });
+  app.post('/admin/checkout-reminders', async () => {
+    await housekeeping.remindGuestsAboutCheckout();
     return { ok: true };
   });
 
