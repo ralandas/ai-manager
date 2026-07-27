@@ -23,6 +23,51 @@ export class TelegramMessenger implements Messenger {
   }
 
   async init(): Promise<void> {
+    if (config.TELEGRAM_MODE === 'polling') {
+      await this.initPolling();
+    } else {
+      await this.initWebhook();
+    }
+  }
+
+  /**
+   * Long-polling mode: no public HTTPS needed. We ask Telegram to drop any
+   * existing webhook, then loop getUpdates. Good for the pilot / dev.
+   */
+  private async initPolling(): Promise<void> {
+    await fetch(`${this.api}/deleteWebhook`, { method: 'POST' }).catch(() => {});
+    logger.info('telegram: polling mode (getUpdates)');
+    void this.pollLoop();
+  }
+
+  private async pollLoop(): Promise<void> {
+    let offset = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        const res = await fetch(`${this.api}/getUpdates`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ offset, timeout: 30, allowed_updates: ['message'] }),
+        });
+        const data = (await res.json()) as { ok: boolean; result?: TelegramUpdate[] };
+        for (const update of data.result ?? []) {
+          offset = update.update_id + 1;
+          try {
+            const msg = this.normalize(update);
+            if (msg) await this.onMessage(msg);
+          } catch (err) {
+            logger.error({ err }, 'telegram: failed to handle polled update');
+          }
+        }
+      } catch (err) {
+        logger.error({ err }, 'telegram: getUpdates failed, retrying in 3s');
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+    }
+  }
+
+  private async initWebhook(): Promise<void> {
     const path = `/webhook/telegram/${config.TELEGRAM_WEBHOOK_SECRET}`;
 
     this.app.post(path, async (req, reply) => {

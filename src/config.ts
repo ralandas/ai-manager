@@ -18,6 +18,7 @@ const schema = z.object({
 
   MESSENGER: z.enum(['telegram', 'max']).default('telegram'),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_MODE: z.enum(['webhook', 'polling']).default('polling'),
   TELEGRAM_WEBHOOK_SECRET: z.string().default('change-me'),
 
   WAPI_BASE_URL: z.string().optional(),
@@ -27,9 +28,12 @@ const schema = z.object({
   OWNER_CHAT_ID: z.string().optional(),
 
   PMS_PROVIDER: z.enum(['stub', 'realtycalendar']).default('stub'),
-  RC_BASE_URL: z.string().optional(),
-  RC_AUTH_TOKEN: z.string().optional(),
+  RC_BASE_URL: z.string().default('https://realtycalendar.ru'),
+  RC_USER_TOKEN: z.string().optional(), // x-user-token header
   RC_COOKIE: z.string().optional(),
+  RC_USER_AGENT: z.string().default('Mozilla/5.0'),
+  // Default deposit amount (minor units) when creating a payment link.
+  RC_DEFAULT_DEPOSIT: z.coerce.number().default(2500),
 
   DATABASE_URL: z.string().optional(),
 
