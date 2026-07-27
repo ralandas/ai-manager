@@ -15,6 +15,7 @@
     "migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
+    "@fastify/multipart": "^8.3.1",
     "@google/genai": "^2.13.0",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",

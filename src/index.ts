@@ -1,6 +1,10 @@
 import Fastify from 'fastify';
+import multipart from '@fastify/multipart';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { join, extname } from 'node:path';
 import { config } from './config.js';
 import { logger } from './logger.js';
+import { photosRoot } from './frontend/photos.js';
 import { GeminiProvider } from './llm/gemini.js';
 import { TelegramMessenger } from './messenger/telegram.js';
 import { TelegramUserMessenger } from './messenger/telegram-user.js';
@@ -13,10 +17,29 @@ import { registerAdminApi } from './frontend/admin-api.js';
 
 async function main() {
   const app = Fastify({ logger: false });
+  await app.register(multipart, { limits: { fileSize: 15 * 1024 * 1024 } }); // 15MB/photo
 
   app.get('/health', async () => ({ ok: true, ts: Date.now() }));
 
   registerFrontend(app);
+
+  // Public photo serving: /photos/:id/:file (streamed from data/photos).
+  const MIME: Record<string, string> = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+  };
+  app.get<{ Params: { id: string; file: string } }>('/photos/:id/:file', async (req, reply) => {
+    const id = req.params.id.replace(/[^a-zA-Z0-9_-]/g, '');
+    const file = req.params.file.replace(/[^a-zA-Z0-9_.-]/g, '');
+    const path = join(photosRoot(), id, file);
+    if (!existsSync(path) || !statSync(path).isFile()) return reply.code(404).send('not found');
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Cache-Control', 'public, max-age=86400');
+    reply.type(MIME[extname(file).toLowerCase()] ?? 'application/octet-stream');
+    return reply.send(createReadStream(path));
+  });
 
   const pms = createPms();
   const llm = new GeminiProvider();

@@ -20,6 +20,8 @@ export interface Messenger {
   readonly name: 'telegram' | 'max';
   /** Send a plain-text message to a chat. */
   sendMessage(chatId: string, text: string): Promise<void>;
+  /** Send photos (by public URL) with an optional shared caption. */
+  sendPhotos?(chatId: string, urls: string[], caption?: string): Promise<void>;
   /**
    * Register the HTTP webhook route(s) on the given Fastify instance and,
    * where applicable, tell the provider where to deliver updates.

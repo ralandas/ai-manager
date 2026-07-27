@@ -8,6 +8,7 @@ import {
   saveApartmentInfo,
   type ApartmentInfo,
 } from './apartments-info.js';
+import { listPhotoFiles, savePhoto, deletePhoto } from './photos.js';
 
 /**
  * Admin API for the apartment-info editor (hosted on Vercel). The owner logs in
@@ -109,6 +110,41 @@ export function registerAdminApi(app: FastifyInstance, pms: PmsConnector): void 
         extra: body.extra,
       });
       return { ok: true, info: saved };
+    },
+  );
+
+  // --- photos ---
+
+  // List current photo file names for an apartment.
+  app.get<{ Params: { id: string } }>('/api/admin/apartments/:id/photos', async (req, reply) => {
+    if (!requireAuth(req, reply)) return;
+    return { photos: listPhotoFiles(req.params.id) };
+  });
+
+  // Upload one photo (multipart form field "file").
+  app.post<{ Params: { id: string } }>(
+    '/api/admin/apartments/:id/photos',
+    async (req, reply) => {
+      if (!requireAuth(req, reply)) return;
+      const file = await req.file();
+      if (!file) return reply.code(400).send({ error: 'no file' });
+      const buf = await file.toBuffer();
+      try {
+        const name = savePhoto(req.params.id, buf, file.filename);
+        return { ok: true, file: name, photos: listPhotoFiles(req.params.id) };
+      } catch (err) {
+        return reply.code(400).send({ error: err instanceof Error ? err.message : 'bad file' });
+      }
+    },
+  );
+
+  // Delete a photo by file name.
+  app.delete<{ Params: { id: string; file: string } }>(
+    '/api/admin/apartments/:id/photos/:file',
+    async (req, reply) => {
+      if (!requireAuth(req, reply)) return;
+      const ok = deletePhoto(req.params.id, req.params.file);
+      return { ok, photos: listPhotoFiles(req.params.id) };
     },
   );
 }

@@ -6,6 +6,10 @@ import {
   listApartments,
   getApartment,
   saveApartment,
+  listPhotos,
+  uploadPhoto,
+  deletePhoto,
+  photoUrl,
   type ApartmentInfo,
   type ApartmentListItem,
 } from '../lib/api';
@@ -156,12 +160,40 @@ function Edit({ token, id, onBack }: { token: string; id: string; onBack: () => 
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     getApartment(token, id)
       .then(setInfo)
       .catch(() => setErr('Не удалось загрузить квартиру'));
+    listPhotos(token, id)
+      .then(setPhotos)
+      .catch(() => {});
   }, [token, id]);
+
+  const onUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setErr('');
+    try {
+      let latest = photos;
+      for (const f of Array.from(files)) latest = await uploadPhoto(token, id, f);
+      setPhotos(latest);
+    } catch {
+      setErr('Не удалось загрузить фото');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onDeletePhoto = async (file: string) => {
+    try {
+      setPhotos(await deletePhoto(token, id, file));
+    } catch {
+      setErr('Не удалось удалить фото');
+    }
+  };
 
   const set = (patch: Partial<ApartmentInfo>) => setInfo((v) => (v ? { ...v, ...patch } : v));
 
@@ -198,6 +230,32 @@ function Edit({ token, id, onBack }: { token: string; id: string; onBack: () => 
           onChange={(e) => set({ address: e.target.value })}
           placeholder="г. Чита, ул. Шилова, 12, кв. 5"
         />
+
+        <label>Фото квартиры</label>
+        <div className="hint">
+          Их бот отправит клиенту по запросу, с подписью (название + цена)
+        </div>
+        <div className="photos">
+          {photos.map((f) => (
+            <div className="photo" key={f}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={photoUrl(id, f)} alt={f} />
+              <button type="button" className="del" onClick={() => onDeletePhoto(f)}>
+                ✕
+              </button>
+            </div>
+          ))}
+          <label className="uploader">
+            {uploading ? 'Загрузка…' : '+ Добавить'}
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => onUpload(e.target.files)}
+            />
+          </label>
+        </div>
 
         <label>Как заселиться</label>
         <div className="hint">

@@ -57,3 +57,37 @@ export async function saveApartment(
   if (!res.ok) throw new Error(`save failed: ${res.status}`);
   return (await res.json()).info;
 }
+
+const API_ORIGIN = BASE.replace(/\/api\/admin\/?$/, '');
+
+/** Public URL of a stored photo (for previews and the guest-facing send). */
+export function photoUrl(id: string, file: string): string {
+  return `${API_ORIGIN}/photos/${id}/${file}`;
+}
+
+export async function listPhotos(token: string, id: string): Promise<string[]> {
+  const res = await fetch(`${BASE}/apartments/${id}/photos`, { headers: authHeaders(token) });
+  if (!res.ok) throw new Error(`photos failed: ${res.status}`);
+  return (await res.json()).photos;
+}
+
+export async function uploadPhoto(token: string, id: string, file: File): Promise<string[]> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${BASE}/apartments/${id}/photos`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}` }, // no content-type: browser sets multipart boundary
+    body: form,
+  });
+  if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+  return (await res.json()).photos;
+}
+
+export async function deletePhoto(token: string, id: string, file: string): Promise<string[]> {
+  const res = await fetch(`${BASE}/apartments/${id}/photos/${file}`, {
+    method: 'DELETE',
+    headers: authHeaders(token),
+  });
+  if (!res.ok) throw new Error(`delete failed: ${res.status}`);
+  return (await res.json()).photos;
+}

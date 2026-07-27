@@ -26,3 +26,6 @@ logs/
 .idea/
 .vscode/
 *.swp
+
+# uploaded apartment photos (runtime)
+data/photos/

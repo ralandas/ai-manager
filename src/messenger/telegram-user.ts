@@ -108,6 +108,24 @@ export class TelegramUserMessenger implements Messenger {
     }
   }
 
+  async sendPhotos(chatId: string, urls: string[], caption?: string): Promise<void> {
+    // gramjs downloads the URL and uploads it as a photo. Caption on the first.
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        await this.withTimeout(
+          this.client.sendFile(chatId, {
+            file: urls[i]!,
+            caption: i === 0 ? caption : undefined,
+          }),
+          60_000,
+          'sendFile',
+        );
+      } catch (err) {
+        logger.error({ chatId, url: urls[i], err }, 'telegram-user: sendFile failed');
+      }
+    }
+  }
+
   private parseProxy(url?: string):
     | { ip: string; port: number; socksType: 5; username?: string; password?: string; timeout: number }
     | undefined {

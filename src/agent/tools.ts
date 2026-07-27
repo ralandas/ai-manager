@@ -4,6 +4,7 @@ import type { PmsConnector } from '../pms/types.js';
 import type { ToolSchema } from '../llm/types.js';
 import { getApartmentInfo } from '../frontend/apartments-info.js';
 import { apartmentPageUrl } from '../frontend/routes.js';
+import { listPhotoUrls } from '../frontend/photos.js';
 import {
   rememberBookingContact,
   setCheckoutTime,
@@ -162,6 +163,31 @@ export function buildTools(deps: {
         const info = getApartmentInfo(id);
         if (!info) return { error: 'Для этой квартиры пока нет страницы с правилами' };
         return { url: apartmentPageUrl(id), title: info.title };
+      },
+    },
+    {
+      name: 'send_apartment_photos',
+      description:
+        'Отправить клиенту фото квартиры с подписью (название + цена за ночь). Вызывай, когда клиент просит фото или чтобы показать вариант нагляднее.',
+      parameters: {
+        type: 'object',
+        properties: {
+          propertyId: { type: 'string', description: 'ID квартиры' },
+        },
+        required: ['propertyId'],
+      },
+      handler: async (a) => {
+        const id = a.propertyId as string;
+        const urls = listPhotoUrls(id);
+        if (urls.length === 0) return { error: 'Для этой квартиры пока нет фото' };
+        if (!messenger.sendPhotos) return { error: 'Отправка фото недоступна в этом канале' };
+        // Build caption from RC title + price.
+        const props = await pms.listProperties();
+        const p = props.find((x) => x.id === id);
+        const caption = p ? `${p.title} — ${p.basePrice} ₽/ночь` : undefined;
+        await messenger.sendPhotos(chatId, urls, caption);
+        audit('send_apartment_photos', { chatId, propertyId: id, count: urls.length });
+        return { ok: true, sent: urls.length };
       },
     },
     {
