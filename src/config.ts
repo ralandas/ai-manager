@@ -19,10 +19,21 @@ const schema = z.object({
   // Google's API is geo-blocked from the server. Empty = call Google directly.
   GEMINI_BASE_URL: z.string().optional(),
 
-  MESSENGER: z.enum(['telegram', 'max']).default('telegram'),
+  MESSENGER: z.enum(['telegram', 'telegram-user', 'max']).default('telegram'),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_MODE: z.enum(['webhook', 'polling']).default('polling'),
   TELEGRAM_WEBHOOK_SECRET: z.string().default('change-me'),
+
+  // Personal Telegram account (gramjs / MTProto). One session = one process.
+  TG_API_ID: z.coerce.number().optional(),
+  TG_API_HASH: z.string().optional(),
+  TG_SESSION: z.string().optional(), // StringSession (SECRET)
+  TG_PROXY: z.string().optional(), // socks5://user:pass@host:port (per-account geo proxy)
+  // Only auto-reply in private chats to real users (never groups/channels/bots).
+  TG_PRIVATE_ONLY: z
+    .string()
+    .optional()
+    .transform((v) => v === undefined || v === 'true' || v === '1'),
 
   WAPI_BASE_URL: z.string().optional(),
   WAPI_TOKEN: z.string().optional(),

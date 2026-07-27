@@ -21,6 +21,7 @@
     "pino": "^9.4.0",
     "pino-pretty": "^11.2.2",
     "postgres": "^3.4.4",
+    "telegram": "^2.26.22",
     "zod": "^3.23.8"
   },
   "devDependencies": {

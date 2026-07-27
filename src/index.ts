@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { GeminiProvider } from './llm/gemini.js';
 import { TelegramMessenger } from './messenger/telegram.js';
+import { TelegramUserMessenger } from './messenger/telegram-user.js';
 import type { Messenger } from './messenger/types.js';
 import { createPms } from './pms/index.js';
 import { Agent } from './agent/agent.js';
@@ -26,6 +27,8 @@ async function main() {
 
   if (config.MESSENGER === 'telegram') {
     messenger = new TelegramMessenger(app, (msg) => agent.handle(msg));
+  } else if (config.MESSENGER === 'telegram-user') {
+    messenger = new TelegramUserMessenger((msg) => agent.handle(msg));
   } else {
     throw new Error(`Messenger "${config.MESSENGER}" not implemented yet (Max/Wapi is on the roadmap)`);
   }
