@@ -2,6 +2,8 @@ import { config } from '../config.js';
 import type { Messenger } from '../messenger/types.js';
 import type { PmsConnector } from '../pms/types.js';
 import type { ToolSchema } from '../llm/types.js';
+import { getApartmentInfo } from '../frontend/apartments-info.js';
+import { apartmentPageUrl } from '../frontend/routes.js';
 import {
   assertAutonomyEnabled,
   audit,
@@ -129,6 +131,24 @@ export function buildTools(deps: {
         const link = await pms.getPaymentLink(bookingId);
         audit('get_payment_link', { chatId, bookingId, url: link.url });
         return link;
+      },
+    },
+    {
+      name: 'get_apartment_info',
+      description:
+        'Ссылка на страницу квартиры с правилами проживания и инструкцией по заселению. Дай её клиенту вместо пересказа правил текстом.',
+      parameters: {
+        type: 'object',
+        properties: {
+          propertyId: { type: 'string', description: 'ID квартиры (из check_availability)' },
+        },
+        required: ['propertyId'],
+      },
+      handler: async (a) => {
+        const id = a.propertyId as string;
+        const info = getApartmentInfo(id);
+        if (!info) return { error: 'Для этой квартиры пока нет страницы с правилами' };
+        return { url: apartmentPageUrl(id), title: info.title };
       },
     },
   ];

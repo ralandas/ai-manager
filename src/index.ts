@@ -7,11 +7,14 @@ import type { Messenger } from './messenger/types.js';
 import { createPms } from './pms/index.js';
 import { Agent } from './agent/agent.js';
 import { Housekeeping, scheduleDaily } from './housekeeping.js';
+import { registerFrontend } from './frontend/routes.js';
 
 async function main() {
   const app = Fastify({ logger: false });
 
   app.get('/health', async () => ({ ok: true, ts: Date.now() }));
+
+  registerFrontend(app);
 
   const pms = createPms();
   const llm = new GeminiProvider();

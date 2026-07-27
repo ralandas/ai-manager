@@ -18,7 +18,13 @@ export class GeminiProvider implements LlmProvider {
 
   constructor() {
     if (!config.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is required');
-    this.client = new GoogleGenAI({ apiKey: config.GEMINI_API_KEY });
+    this.client = new GoogleGenAI({
+      apiKey: config.GEMINI_API_KEY,
+      // Route through the local gemini-proxy when set (bypasses geo-block).
+      ...(config.GEMINI_BASE_URL
+        ? { httpOptions: { baseUrl: config.GEMINI_BASE_URL } }
+        : {}),
+    });
   }
 
   async runTurn(input: LlmTurnInput): Promise<string> {

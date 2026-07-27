@@ -15,6 +15,9 @@ const schema = z.object({
   LLM_PROVIDER: z.enum(['gemini']).default('gemini'),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-flash-latest'),
+  // Optional base URL override — point at the local gemini-proxy (:9090) when
+  // Google's API is geo-blocked from the server. Empty = call Google directly.
+  GEMINI_BASE_URL: z.string().optional(),
 
   MESSENGER: z.enum(['telegram', 'max']).default('telegram'),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
@@ -33,7 +36,7 @@ const schema = z.object({
   RC_COOKIE: z.string().optional(),
   RC_USER_AGENT: z.string().default('Mozilla/5.0'),
   // Default deposit amount (minor units) when creating a payment link.
-  RC_DEFAULT_DEPOSIT: z.coerce.number().default(2500),
+  RC_DEFAULT_DEPOSIT: z.coerce.number().default(3000),
 
   DATABASE_URL: z.string().optional(),
 

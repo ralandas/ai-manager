@@ -9,6 +9,11 @@ dist/
 .env.*
 !.env.example
 
+# telegram account pool + session state (SECRET — never commit)
+data/pool.json
+data/*-state.json
+data/*.session
+
 # logs
 *.log
 logs/
