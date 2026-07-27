@@ -1,0 +1,26 @@
+# Netlify deploy config for the admin panel.
+# Base directory is this folder (admin-web); set it in Netlify UI or here.
+
+[build]
+  command = "npm run build"
+  publish = "out"
+
+# --- Proxy API + photos to the VPS over http, so the browser only ever
+# --- talks to Netlify's https (no mixed-content, no domain/SSL on the server).
+[[redirects]]
+  from = "/api/*"
+  to = "http://178.88.115.213/api/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/photos/*"
+  to = "http://178.88.115.213/photos/:splat"
+  status = 200
+  force = true
+
+# SPA-ish fallback for the exported app.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

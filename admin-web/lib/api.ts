@@ -1,7 +1,9 @@
-// Client for the AI-manager admin API on the VPS.
-// Set NEXT_PUBLIC_API_BASE in Vercel to the public API URL (e.g. https://your-domain/api/admin).
+// Client for the AI-manager admin API.
+// Default is same-origin "/api/admin" — on Netlify this is proxied to the VPS
+// (see netlify.toml), so the browser only talks https and there's no mixed-content.
+// Override with NEXT_PUBLIC_API_BASE if you host the API elsewhere.
 
-const BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
+const BASE = process.env.NEXT_PUBLIC_API_BASE ?? '/api/admin';
 
 export interface ApartmentListItem {
   id: string;
