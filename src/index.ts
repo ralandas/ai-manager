@@ -9,6 +9,7 @@ import { createPms } from './pms/index.js';
 import { Agent } from './agent/agent.js';
 import { Housekeeping, scheduleDaily } from './housekeeping.js';
 import { registerFrontend } from './frontend/routes.js';
+import { registerAdminApi } from './frontend/admin-api.js';
 
 async function main() {
   const app = Fastify({ logger: false });
@@ -19,6 +20,9 @@ async function main() {
 
   const pms = createPms();
   const llm = new GeminiProvider();
+
+  // Admin API for the Vercel-hosted apartment-info editor.
+  registerAdminApi(app, pms);
 
   // Messenger needs the message handler, but the handler needs the messenger to
   // reply — resolve with a late-bound reference.

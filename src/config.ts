@@ -41,6 +41,10 @@ const schema = z.object({
   HOUSEKEEPING_CHAT_ID: z.string().optional(),
   OWNER_CHAT_ID: z.string().optional(),
 
+  // Admin API (apartment-info editor served on Vercel).
+  ADMIN_TOKEN: z.string().optional(), // required to write; also gates the editor
+  ADMIN_CORS_ORIGIN: z.string().default('*'), // set to the Vercel origin in prod
+
   PMS_PROVIDER: z.enum(['stub', 'realtycalendar']).default('stub'),
   RC_BASE_URL: z.string().default('https://realtycalendar.ru'),
   RC_USER_TOKEN: z.string().optional(), // x-user-token header

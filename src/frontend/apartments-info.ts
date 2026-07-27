@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { logger } from '../logger.js';
@@ -46,4 +46,20 @@ export function invalidateApartmentInfo(): void {
 
 export function getApartmentInfo(id: string): ApartmentInfo | null {
   return load()[id] ?? null;
+}
+
+export function getAllApartmentInfo(): Record<string, ApartmentInfo> {
+  return load();
+}
+
+/** Create/update one apartment's info and persist to disk. */
+export function saveApartmentInfo(info: ApartmentInfo): ApartmentInfo {
+  const all = load();
+  all[info.id] = { ...all[info.id], ...info };
+  const dir = dirname(DATA_PATH);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(DATA_PATH, JSON.stringify(all, null, 2));
+  cache = all; // keep cache hot
+  logger.info({ id: info.id }, 'apartment info saved');
+  return all[info.id]!;
 }
