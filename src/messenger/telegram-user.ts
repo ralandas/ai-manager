@@ -56,11 +56,27 @@ export class TelegramUserMessenger implements Messenger {
       this.lock.release();
       throw new Error('Telegram session is not authorized (dead session — needs re-login)');
     }
-    const me = await this.client.getMe();
-    logger.info(
-      { user: (me as Api.User)?.username ?? (me as Api.User)?.id?.toString() },
-      'telegram-user: connected',
-    );
+    const me = (await this.client.getMe()) as Api.User;
+    logger.info({ user: me?.username ?? me?.id?.toString() }, 'telegram-user: connected');
+
+    // Set the public @username. TG_USERNAME may be a comma-separated list of
+    // candidates; the first free one is applied (Telegram 400s USERNAME_OCCUPIED
+    // on taken ones). Skips if already set to one of them.
+    if (config.TG_USERNAME) {
+      const candidates = config.TG_USERNAME.split(',').map((s) => s.trim()).filter(Boolean);
+      if (!candidates.includes(me?.username ?? '')) {
+        for (const username of candidates) {
+          try {
+            await this.client.invoke(new Api.account.UpdateUsername({ username }));
+            logger.info({ username }, 'telegram-user: username set');
+            break;
+          } catch (err) {
+            const m = err instanceof Error ? err.message : String(err);
+            logger.warn({ username, err: m }, 'telegram-user: username not available, trying next');
+          }
+        }
+      }
+    }
 
     this.client.addEventHandler((e) => this.onEvent(e), new NewMessage({ incoming: true }));
   }

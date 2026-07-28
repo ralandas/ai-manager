@@ -29,6 +29,7 @@ const schema = z.object({
   TG_API_HASH: z.string().optional(),
   TG_SESSION: z.string().optional(), // StringSession (SECRET)
   TG_PROXY: z.string().optional(), // socks5://user:pass@host:port (per-account geo proxy)
+  TG_USERNAME: z.string().optional(), // desired public @username for the account
   // Only auto-reply in private chats to real users (never groups/channels/bots).
   TG_PRIVATE_ONLY: z
     .string()
