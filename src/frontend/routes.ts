@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
-import { getApartmentInfo, type ApartmentInfo } from './apartments-info.js';
+import type { ApartmentInfo } from './apartments-info.js';
+import { sql } from '../db/index.js';
+import { listPhotoUrls } from './photos.js';
 
 /** Public URL of an apartment's info page (shared with guests in chat). */
 export function apartmentPageUrl(id: string): string {
@@ -53,6 +55,7 @@ function renderPage(info: ApartmentInfo): string {
 </style></head>
 <body><div class="wrap">
   <header><h1>${esc(info.title)}</h1>${info.address ? `<div class="addr">${esc(info.address)}</div>` : ''}</header>
+  ${photosHtml(info.photos ?? [])}
   ${section('Как заселиться', info.checkinInstructions ?? '')}
   ${section('Правила проживания', info.rules ?? '')}
   ${wifi}
@@ -61,13 +64,44 @@ function renderPage(info: ApartmentInfo): string {
 </div></body></html>`;
 }
 
+function photosHtml(urls: string[]): string {
+  if (!urls.length) return '';
+  const imgs = urls
+    .map((u) => `<img src="${esc(u)}" alt="" loading="lazy">`)
+    .join('');
+  return `<section class="gallery"><div class="grid">${imgs}</div></section>
+  <style>.gallery .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .gallery img{width:100%;height:140px;object-fit:cover;border-radius:10px;display:block}</style>`;
+}
+
+/** Public info page — reads the card from DB (any owner) + its photos. */
 export function registerFrontend(app: FastifyInstance): void {
   app.get<{ Params: { id: string } }>('/apt/:id', async (req, reply) => {
-    const info = getApartmentInfo(req.params.id);
-    if (!info) {
+    const id = req.params.id;
+    let rows: Record<string, unknown>[] = [];
+    try {
+      rows = (await sql`SELECT * FROM apartments WHERE id = ${id} LIMIT 1`) as unknown as Record<
+        string,
+        unknown
+      >[];
+    } catch {
+      /* db down → 404 below */
+    }
+    if (!rows.length) {
       reply.code(404).type('text/html').send('<h1>Квартира не найдена</h1>');
       return;
     }
+    const r = rows[0]!;
+    const info: ApartmentInfo & { photos?: string[] } = {
+      id,
+      title: (r.title as string) ?? 'Квартира',
+      address: (r.address as string) ?? undefined,
+      rules: (r.rules as string) ?? undefined,
+      checkinInstructions: (r.checkin_instructions as string) ?? undefined,
+      wifi: { name: (r.wifi_name as string) ?? undefined, password: (r.wifi_password as string) ?? undefined },
+      extra: (r.extra as string) ?? undefined,
+      photos: listPhotoUrls(id),
+    };
     reply.type('text/html').send(renderPage(info));
   });
 }

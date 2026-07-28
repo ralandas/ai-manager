@@ -2,9 +2,13 @@ import { config } from '../config.js';
 import type { Messenger } from '../messenger/types.js';
 import type { PmsConnector } from '../pms/types.js';
 import type { ToolSchema } from '../llm/types.js';
-import { getApartmentInfo } from '../frontend/apartments-info.js';
 import { apartmentPageUrl } from '../frontend/routes.js';
 import { listPhotoUrls } from '../frontend/photos.js';
+import {
+  listOwnerApartments,
+  getApartmentCard,
+  type AptCard,
+} from '../store/apartments-repo.js';
 import {
   rememberBookingContact,
   setCheckoutTime,
@@ -43,12 +47,33 @@ export function buildTools(deps: {
     }
   };
 
+  const ownerId = config.AGENT_OWNER_ID;
+
+  // Load a card by our id (DB mode) — used to resolve rc id + info + price.
+  const card = async (id: string): Promise<AptCard | null> =>
+    ownerId ? getApartmentCard(ownerId, id) : null;
+
+  // Map the propertyId the model uses to the RC apartment id for PMS calls.
+  // In DB mode propertyId is our card id → resolve to rc_apartment_id.
+  // Without an owner set, pass through (legacy: propertyId already is the RC id).
+  const toRcId = async (propertyId: string): Promise<string | null> => {
+    if (!ownerId) return propertyId;
+    const c = await getApartmentCard(ownerId, propertyId);
+    return c?.rcApartmentId ?? null;
+  };
+
   return [
     {
       name: 'list_properties',
-      description: 'Список доступных квартир с ценами и вместимостью.',
+      description: 'Список доступных квартир с ценами.',
       parameters: { type: 'object', properties: {}, required: [] },
-      handler: async () => pms.listProperties(),
+      handler: async () => {
+        if (ownerId) {
+          const cards = await listOwnerApartments(ownerId);
+          return cards.map((c) => ({ id: c.id, title: c.title, price: c.price }));
+        }
+        return pms.listProperties();
+      },
     },
     {
       name: 'check_availability',
@@ -64,13 +89,54 @@ export function buildTools(deps: {
         },
         required: ['checkIn', 'checkOut', 'guests'],
       },
-      handler: async (a) =>
-        pms.checkAvailability({
-          propertyId: a.propertyId as string | undefined,
-          checkIn: a.checkIn as string,
-          checkOut: a.checkOut as string,
-          guests: Number(a.guests),
-        }),
+      handler: async (a) => {
+        const checkIn = a.checkIn as string;
+        const checkOut = a.checkOut as string;
+        const guests = Number(a.guests);
+
+        if (!ownerId) {
+          return pms.checkAvailability({
+            propertyId: a.propertyId as string | undefined,
+            checkIn,
+            checkOut,
+            guests,
+          });
+        }
+
+        // DB mode: build the list of cards to check, resolve each to its RC id.
+        const cards = a.propertyId
+          ? ([await card(a.propertyId as string)].filter(Boolean) as AptCard[])
+          : await listOwnerApartments(ownerId);
+
+        const results = [];
+        for (const c of cards) {
+          if (!c.rcApartmentId) {
+            // No RC link yet — report as not bookable via RC.
+            results.push({
+              propertyId: c.id,
+              title: c.title,
+              available: false,
+              note: 'бронирование этой квартиры пока не настроено',
+            });
+            continue;
+          }
+          const rc = await pms.checkAvailability({
+            propertyId: c.rcApartmentId,
+            checkIn,
+            checkOut,
+            guests,
+          });
+          const r = rc[0];
+          results.push({
+            propertyId: c.id, // keep OUR id so downstream tools resolve correctly
+            title: c.title,
+            available: r?.available ?? false,
+            nights: r?.nights,
+            totalPrice: r?.totalPrice ?? (c.price ?? 0),
+          });
+        }
+        return results;
+      },
     },
     {
       name: 'create_booking',
@@ -98,14 +164,19 @@ export function buildTools(deps: {
           totalPrice: Number(a.totalPrice),
         };
         validateBooking(input);
+        const cardId = a.propertyId as string;
+        const rcId = await toRcId(cardId);
+        if (!rcId) {
+          return { error: 'Для этой квартиры не настроено бронирование (нет связи с PMS)' };
+        }
         const key = bookingIdempotencyKey({
           chatId,
-          propertyId: a.propertyId as string,
+          propertyId: cardId,
           checkIn: input.checkIn,
           checkOut: input.checkOut,
         });
         const booking = await pms.createBooking({
-          propertyId: a.propertyId as string,
+          propertyId: rcId,
           guestName: a.guestName as string,
           guestPhone: a.guestPhone as string | undefined,
           idempotencyKey: key,
@@ -160,9 +231,9 @@ export function buildTools(deps: {
       },
       handler: async (a) => {
         const id = a.propertyId as string;
-        const info = getApartmentInfo(id);
-        if (!info) return { error: 'Для этой квартиры пока нет страницы с правилами' };
-        return { url: apartmentPageUrl(id), title: info.title };
+        const c = await card(id);
+        if (!c) return { error: 'Квартира не найдена' };
+        return { url: apartmentPageUrl(id), title: c.title };
       },
     },
     {
@@ -181,10 +252,10 @@ export function buildTools(deps: {
         const urls = listPhotoUrls(id);
         if (urls.length === 0) return { error: 'Для этой квартиры пока нет фото' };
         if (!messenger.sendPhotos) return { error: 'Отправка фото недоступна в этом канале' };
-        // Build caption from RC title + price.
-        const props = await pms.listProperties();
-        const p = props.find((x) => x.id === id);
-        const caption = p ? `${p.title} — ${p.basePrice} ₽/ночь` : undefined;
+        const c = await card(id);
+        const caption = c
+          ? `${c.title}${c.price ? ` — ${c.price} ₽/ночь` : ''}`
+          : undefined;
         await messenger.sendPhotos(chatId, urls, caption);
         audit('send_apartment_photos', { chatId, propertyId: id, count: urls.length });
         return { ok: true, sent: urls.length };

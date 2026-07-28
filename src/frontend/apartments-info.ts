@@ -19,6 +19,8 @@ export interface ApartmentInfo {
   checkinInstructions?: string;
   wifi?: { name?: string; password?: string };
   extra?: string;
+  /** Public photo URLs (populated when rendering the guest page). */
+  photos?: string[];
 }
 
 let cache: Record<string, ApartmentInfo> | null = null;

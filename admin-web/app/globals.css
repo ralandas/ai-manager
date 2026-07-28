@@ -28,6 +28,8 @@ body {
   line-height: 1.5;
 }
 .wrap { max-width: 680px; margin: 0 auto; padding: 20px 16px 64px; }
+.wrap.narrow { max-width: 420px; }
+button.ghost.danger { color: #dc2626; }
 h1 { font-size: 1.4rem; margin: 4px 0 2px; }
 .sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 20px; }
 

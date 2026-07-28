@@ -41,9 +41,12 @@ const schema = z.object({
   HOUSEKEEPING_CHAT_ID: z.string().optional(),
   OWNER_CHAT_ID: z.string().optional(),
 
-  // Admin API (apartment-info editor served on Vercel).
-  ADMIN_TOKEN: z.string().optional(), // required to write; also gates the editor
-  ADMIN_CORS_ORIGIN: z.string().default('*'), // set to the Vercel origin in prod
+  // Admin API (apartment editor served on Netlify).
+  ADMIN_TOKEN: z.string().optional(), // legacy single-token (kept for /api/admin compat)
+  ADMIN_CORS_ORIGIN: z.string().default('*'), // set to the front origin in prod
+  JWT_SECRET: z.string().default('dev-insecure-change-me'), // signs owner login tokens
+  // Pilot: which owner's apartment catalog the agent serves in chat.
+  AGENT_OWNER_ID: z.string().optional(),
 
   PMS_PROVIDER: z.enum(['stub', 'realtycalendar']).default('stub'),
   RC_BASE_URL: z.string().default('https://realtycalendar.ru'),
