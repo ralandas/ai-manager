@@ -24,18 +24,40 @@ import type {
  *  - bookings list (/requests_bookings) compares DD.MM.YYYY
  * The business timezone is GMT+9 (Asia/Tokyo), matching the reference code.
  */
-export class RealtyCalendarClient implements PmsConnector {
-  private readonly base = config.RC_BASE_URL;
+/** Per-owner Realty Calendar credentials. */
+export interface RcCreds {
+  userToken: string;
+  cookie?: string;
+  userAgent?: string;
+  baseUrl?: string;
+  defaultDeposit?: number;
+}
 
-  constructor() {
-    if (!config.RC_USER_TOKEN) throw new Error('RC_USER_TOKEN is required for realtycalendar');
+export class RealtyCalendarClient implements PmsConnector {
+  private readonly base: string;
+  private readonly creds: RcCreds;
+
+  /**
+   * Credentials come from the owner record (per-owner mode). If omitted, falls
+   * back to env (legacy single-tenant), so existing setups keep working.
+   */
+  constructor(creds?: RcCreds) {
+    this.creds = creds ?? {
+      userToken: config.RC_USER_TOKEN ?? '',
+      cookie: config.RC_COOKIE,
+      userAgent: config.RC_USER_AGENT,
+      baseUrl: config.RC_BASE_URL,
+      defaultDeposit: config.RC_DEFAULT_DEPOSIT,
+    };
+    if (!this.creds.userToken) throw new Error('RC user token is required for realtycalendar');
+    this.base = this.creds.baseUrl ?? config.RC_BASE_URL;
   }
 
   private headers(): Record<string, string> {
     return {
-      'x-user-token': config.RC_USER_TOKEN!,
-      Cookie: config.RC_COOKIE ?? '',
-      'User-Agent': config.RC_USER_AGENT,
+      'x-user-token': this.creds.userToken,
+      Cookie: this.creds.cookie ?? '',
+      'User-Agent': this.creds.userAgent ?? config.RC_USER_AGENT,
       Accept: 'application/json',
       'content-type': 'application/json',
     };
@@ -137,7 +159,7 @@ export class RealtyCalendarClient implements PmsConnector {
 
     const created = await this.request<RcDeposit>('post', ep, {
       note: 'auto',
-      amount: config.RC_DEFAULT_DEPOSIT,
+      amount: this.creds.defaultDeposit ?? config.RC_DEFAULT_DEPOSIT,
       type: 'get_link',
     });
     if (!created?.payment_link) throw new Error('RC getPaymentLink: no payment_link returned');

@@ -12,6 +12,11 @@ CREATE TABLE IF NOT EXISTS users (
   CONSTRAINT users_email_or_phone CHECK (email IS NOT NULL OR phone IS NOT NULL)
 );
 
+-- Which PMS this owner uses and its credentials (per-owner, so different
+-- clients can run on different PMS at the same time). Added idempotently.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pms_provider TEXT NOT NULL DEFAULT 'stub';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pms_credentials JSONB NOT NULL DEFAULT '{}'::jsonb;
+
 CREATE TABLE IF NOT EXISTS apartments (
   id            BIGSERIAL PRIMARY KEY,
   owner_id      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

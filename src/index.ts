@@ -10,6 +10,7 @@ import { TelegramMessenger } from './messenger/telegram.js';
 import { TelegramUserMessenger } from './messenger/telegram-user.js';
 import type { Messenger } from './messenger/types.js';
 import { createPms } from './pms/index.js';
+import { createPmsForOwner } from './pms/for-owner.js';
 import { Agent } from './agent/agent.js';
 import { Housekeeping, scheduleDaily } from './housekeeping.js';
 import { registerFrontend } from './frontend/routes.js';
@@ -42,7 +43,10 @@ async function main() {
     return reply.send(createReadStream(path));
   });
 
-  const pms = createPms();
+  // PMS: per-owner when AGENT_OWNER_ID is set (multi-tenant), else global env PMS.
+  const pms = config.AGENT_OWNER_ID
+    ? await createPmsForOwner(config.AGENT_OWNER_ID)
+    : createPms();
   const llm = new GeminiProvider();
 
   // Legacy single-token admin API (kept for compatibility).
