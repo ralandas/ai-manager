@@ -43,7 +43,7 @@ export class GeminiProvider implements LlmProvider {
     };
 
     for (let hop = 0; hop < MAX_TOOL_HOPS; hop++) {
-      const response = await this.client.models.generateContent({
+      const response = await this.generateWithRetry({
         model: config.GEMINI_MODEL,
         contents,
         config: requestConfig,
@@ -85,6 +85,45 @@ export class GeminiProvider implements LlmProvider {
     logger.warn({ hops: MAX_TOOL_HOPS }, 'gemini: tool-hop limit reached');
     return 'Извините, мне нужно уточнить детали. Секунду, я вернусь к вам.';
   }
+
+  /**
+   * generateContent with retries for transient failures. The gemini-proxy's
+   * SOCKS upstream occasionally blips (502 "upstream Socket closed", timeouts);
+   * without a retry a single blip would surface to the guest as an error.
+   */
+  private async generateWithRetry(
+    req: Parameters<GoogleGenAI['models']['generateContent']>[0],
+  ): ReturnType<GoogleGenAI['models']['generateContent']> {
+    const MAX_ATTEMPTS = 3;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await this.client.models.generateContent(req);
+      } catch (err) {
+        lastErr = err;
+        if (!isTransient(err) || attempt === MAX_ATTEMPTS) throw err;
+        const backoff = 500 * attempt;
+        logger.warn({ attempt, backoff }, 'gemini: transient error, retrying');
+        await new Promise((r) => setTimeout(r, backoff));
+      }
+    }
+    throw lastErr;
+  }
+}
+
+/** 502/503/504, timeouts, socket resets — worth retrying; 4xx (bad request) — not. */
+function isTransient(err: unknown): boolean {
+  const status = (err as { status?: number })?.status;
+  if (status && [500, 502, 503, 504].includes(status)) return true;
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes('socket') ||
+    msg.includes('timeout') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('fetch failed') ||
+    msg.includes('bad gateway')
+  );
 }
 
 function toDeclaration(tool: ToolSchema): FunctionDeclaration {
