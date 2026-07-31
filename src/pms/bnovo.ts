@@ -198,6 +198,31 @@ export class BnovoClient implements PmsConnector {
     return res ?? { result: [], closures: [] };
   }
 
+  /**
+   * Rooms dictionary room_id -> { roomTypeId, number }. Bnovo needs room_type_id
+   * to create a booking; in /planning/bookings that value is `dual_roomtype_id`
+   * (verified: room_id 1222930 -> dual_roomtype_id 666444, the pair a real
+   * /booking/add used). Built from a wide bookings window and cached.
+   */
+  private roomsCache: Map<string, { roomTypeId: number; number: string }> | null = null;
+
+  private async rooms(): Promise<Map<string, { roomTypeId: number; number: string }>> {
+    if (this.roomsCache) return this.roomsCache;
+    const today = new Date();
+    const { result } = await this.fetchBookings(
+      this.fmt(today),
+      this.fmt(new Date(today.getTime() + 365 * DAY_MS)),
+    );
+    const map = new Map<string, { roomTypeId: number; number: string }>();
+    for (const b of result) {
+      if (b.room_id && b.dual_roomtype_id) {
+        map.set(String(b.room_id), { roomTypeId: b.dual_roomtype_id, number: b.number });
+      }
+    }
+    this.roomsCache = map;
+    return map;
+  }
+
   /** ISO date (YYYY-MM-DD) from a Bnovo datetime like "2026-07-20 15:00:00". */
   private isoDay(dt: string): string {
     return dt.slice(0, 10);
@@ -209,18 +234,13 @@ export class BnovoClient implements PmsConnector {
   }
 
   async listProperties(): Promise<Property[]> {
-    // Derive the room list from a wide bookings window (the cabinet has no clean
-    // "rooms" endpoint captured yet). Human-friendly names need the rooms
-    // dictionary; until then the internal `number` code is used as the title.
-    const today = new Date();
-    const from = this.fmt(today);
-    const to = this.fmt(new Date(today.getTime() + 365 * DAY_MS));
-    const { result } = await this.fetchBookings(from, to);
-    const byRoom = new Map<number, string>();
-    for (const b of result) if (b.room_id) byRoom.set(b.room_id, b.number);
-    return [...byRoom].map(([room_id, number]) => ({
-      id: String(room_id),
-      title: number,
+    // Room list derived from a wide bookings window (no clean rooms endpoint).
+    // `number` is Bnovo's internal code; human-friendly names would need a
+    // dedicated dictionary we haven't captured. propertyId = room_id.
+    const rooms = await this.rooms();
+    return [...rooms].map(([room_id, r]) => ({
+      id: room_id,
+      title: r.number,
       basePrice: 0, // per-date price comes from checkAvailability
       maxGuests: 0,
     }));
@@ -259,17 +279,22 @@ export class BnovoClient implements PmsConnector {
   }
 
   async createBooking(input: CreateBookingInput): Promise<Booking> {
-    // Bnovo /booking/add needs the real room_type_id, which differs from room_id.
-    // The map room_id -> room_type_id comes from the rooms dictionary (not yet
-    // captured). Until then propertyId must be "roomTypeId:roomId"; a bare id is
-    // rejected loudly rather than silently creating a wrong booking.
-    const [roomTypeStr, roomStr] = String(input.propertyId).split(':');
-    const roomTypeId = Number(roomTypeStr);
-    const roomId = Number(roomStr ?? roomTypeStr);
-    if (!roomStr) {
-      throw new Error(
-        'Bnovo createBooking: propertyId must be "roomTypeId:roomId" (rooms dictionary not yet mapped)',
-      );
+    // propertyId is the room_id; Bnovo needs the room_type_id too, which we map
+    // from the rooms dictionary (room_id -> dual_roomtype_id). Also accept an
+    // explicit "roomTypeId:roomId" form for callers that already know both.
+    const raw = String(input.propertyId);
+    let roomId: number;
+    let roomTypeId: number;
+    if (raw.includes(':')) {
+      const [t, r] = raw.split(':');
+      roomTypeId = Number(t);
+      roomId = Number(r);
+    } else {
+      roomId = Number(raw);
+      const rooms = await this.rooms();
+      const entry = rooms.get(raw);
+      if (!entry) throw new Error(`Bnovo createBooking: unknown room_id ${raw}`);
+      roomTypeId = entry.roomTypeId;
     }
     const parts = input.guestName.trim().split(/\s+/);
     const surname = parts[0] ?? input.guestName;
@@ -315,20 +340,25 @@ export class BnovoClient implements PmsConnector {
     price: number;
     notes?: string;
   }): Promise<string | null> {
-    // room_types keyed by each night's date -> room assignment.
+    // Bnovo needs numeric ids (dictionary yields them as strings) — coerce.
+    const roomTypeId = Number(p.roomTypeId);
+    const roomId = Number(p.roomId);
+
+    // room_types keyed by each night's date (checkIn .. checkOut exclusive).
     const perNight: Record<string, unknown> = {};
-    for (let t = Date.parse(p.checkIn); t < Date.parse(p.checkOut) || t === Date.parse(p.checkIn); t += DAY_MS) {
+    const start = Date.parse(p.checkIn);
+    const end = Math.max(Date.parse(p.checkOut), start + DAY_MS); // at least one night
+    for (let t = start; t < end; t += DAY_MS) {
       perNight[this.fmt(new Date(t))] = {
-        room_type_id: p.roomTypeId,
-        real_room_type_id: p.roomTypeId,
-        room_id: p.roomId,
+        room_type_id: roomTypeId,
+        real_room_type_id: roomTypeId,
+        room_id: roomId,
         adults: p.guests,
         children: 0,
         price: p.price,
         discount_amount: 0,
         discount_type: 0,
       };
-      if (Date.parse(p.checkOut) <= Date.parse(p.checkIn)) break; // same-day guard
     }
 
     const body = {
