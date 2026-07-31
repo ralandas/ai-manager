@@ -29,3 +29,9 @@ logs/
 
 # uploaded apartment photos (runtime)
 data/photos/
+
+# Private guest chat screenshots — never commit (real PII + owner payment data)
+photos/
+
+# Owner business knowledge distilled from private chats (card number, box codes, wifi)
+knowledge/

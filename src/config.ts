@@ -54,8 +54,10 @@ const schema = z.object({
   RC_USER_TOKEN: z.string().optional(), // x-user-token header
   RC_COOKIE: z.string().optional(),
   RC_USER_AGENT: z.string().default('Mozilla/5.0'),
-  // Default deposit amount (minor units) when creating a payment link.
-  RC_DEFAULT_DEPOSIT: z.coerce.number().default(3000),
+  // Default deposit when creating a payment link. Owner's real standard deposit
+  // is 2500 ₽ (from chat screenshots; 1500 on a couple of flats). Per-owner
+  // creds can override via pms_credentials.defaultDeposit.
+  RC_DEFAULT_DEPOSIT: z.coerce.number().default(2500),
 
   DATABASE_URL: z.string().optional(),
 
