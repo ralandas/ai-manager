@@ -43,7 +43,9 @@ export async function createPmsForOwner(ownerId: string): Promise<PmsConnector> 
       break;
     case 'bnovo':
       pms = new BnovoClient({
-        sid: String(c.sid ?? ''),
+        username: c.username ? String(c.username) : undefined,
+        password: c.password ? String(c.password) : undefined,
+        sid: c.sid ? String(c.sid) : undefined,
         baseUrl: c.baseUrl ? String(c.baseUrl) : undefined,
         userAgent: c.userAgent ? String(c.userAgent) : undefined,
         arrivalTime: c.arrivalTime ? String(c.arrivalTime) : undefined,

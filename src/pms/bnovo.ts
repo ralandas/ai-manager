@@ -24,8 +24,11 @@ import type {
  *   POST /booking/add         (json)  -> { result:"success", first_booking_id }
  */
 export interface BnovoCreds {
-  /** Session cookie value: `SID=<value>`. This is the whole auth. */
-  sid: string;
+  /** Login credentials — the client logs in and refreshes the SID itself. */
+  username?: string;
+  password?: string;
+  /** Optional seed session cookie; if login creds are set it's auto-refreshed. */
+  sid?: string;
   baseUrl?: string;
   userAgent?: string;
   /** Default arrival/departure clock times used when creating bookings. */
@@ -78,8 +81,13 @@ export class BnovoClient implements PmsConnector {
   private readonly planId: string;
   private readonly marketingSourceId: string;
 
+  private sid: string | null = null;
+
   constructor(private readonly creds: BnovoCreds) {
-    if (!creds.sid) throw new Error('Bnovo requires the SID session cookie');
+    if (!creds.sid && !(creds.username && creds.password)) {
+      throw new Error('Bnovo requires either a SID cookie or username+password');
+    }
+    this.sid = creds.sid ?? null;
     this.base = creds.baseUrl ?? 'https://online.bnovo.ru';
     this.ua =
       creds.userAgent ??
@@ -92,7 +100,7 @@ export class BnovoClient implements PmsConnector {
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
     return {
-      Cookie: `SID=${this.creds.sid}`,
+      Cookie: `SID=${this.sid ?? ''}`,
       'User-Agent': this.ua,
       Accept: 'application/json, text/plain, */*',
       'x-requested-with': 'XMLHttpRequest',
@@ -101,12 +109,56 @@ export class BnovoClient implements PmsConnector {
     };
   }
 
+  /**
+   * Log in with username/password and capture the fresh SID from Set-Cookie.
+   * POST / (x-www-form-urlencoded) { mat, username, password } -> 302 + Set-Cookie SID.
+   */
+  private async login(): Promise<boolean> {
+    if (!this.creds.username || !this.creds.password) return false;
+    try {
+      const body = new URLSearchParams({
+        mat: '',
+        username: this.creds.username,
+        password: this.creds.password,
+      }).toString();
+      const res = await fetch(`${this.base}/`, {
+        method: 'post',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          'User-Agent': this.ua,
+          Origin: this.base,
+          Referer: `${this.base}/`,
+        },
+        body,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(20_000),
+      });
+      const cookies = res.headers.getSetCookie?.() ?? [res.headers.get('set-cookie') ?? ''];
+      for (const line of cookies) {
+        const m = /SID=([^;]+)/.exec(line ?? '');
+        if (m) {
+          this.sid = m[1]!;
+          logger.info({ status: res.status }, 'Bnovo login ok, SID refreshed');
+          return true;
+        }
+      }
+      logger.error({ status: res.status }, 'Bnovo login: no SID in Set-Cookie');
+      return false;
+    } catch (err) {
+      logger.error({ err }, 'Bnovo login threw');
+      return false;
+    }
+  }
+
   private async request<T>(
     method: string,
     endpoint: string,
     opts: { body?: string; headers?: Record<string, string> } = {},
+    retrying = false,
   ): Promise<T | null> {
     const url = `${this.base}${endpoint}`;
+    // Ensure we have a session before the first call.
+    if (!this.sid && !(await this.login())) return null;
     try {
       const res = await fetch(url, {
         method,
@@ -116,8 +168,14 @@ export class BnovoClient implements PmsConnector {
       });
       const text = await res.text();
       logger.info({ url, method, status: res.status }, 'Bnovo request');
-      if (!res.ok) {
-        logger.error({ url, status: res.status, body: text.slice(0, 500) }, 'Bnovo request failed');
+
+      // Session died (expired cookie): Bnovo answers "session_expired" or 401/403.
+      const expired = res.status === 401 || res.status === 403 || text.trim() === 'session_expired';
+      if (expired && !retrying && (await this.login())) {
+        return this.request<T>(method, endpoint, opts, true);
+      }
+      if (!res.ok || expired) {
+        logger.error({ url, status: res.status, body: text.slice(0, 300) }, 'Bnovo request failed');
         return null;
       }
       return text.trim() ? (JSON.parse(text) as T) : null;
