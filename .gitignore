@@ -35,3 +35,8 @@ photos/
 
 # Owner business knowledge distilled from private chats (card number, box codes, wifi)
 knowledge/
+
+# Bnovo reverse-engineering dumps — live session cookie + guest PII, never commit
+bookings.json
+logs_network.txt
+bnovo_*.json
