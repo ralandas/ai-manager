@@ -75,4 +75,6 @@ export interface PmsConnector {
   getPaymentLink(bookingId: string): Promise<PaymentLink>;
   /** Checkouts scheduled for a specific ISO date (used by nightly forecast). */
   getCheckouts(isoDate: string): Promise<Checkout[]>;
+  /** Photo URLs for a property, pulled from the PMS itself (optional). */
+  getPhotos?(propertyId: string): Promise<string[]>;
 }

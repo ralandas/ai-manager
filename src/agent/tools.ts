@@ -249,7 +249,12 @@ export function buildTools(deps: {
       },
       handler: async (a) => {
         const id = a.propertyId as string;
-        const urls = listPhotoUrls(id);
+        // 1) локальные фото (загруженные через админку), 2) фолбэк — фото из PMS.
+        let urls = listPhotoUrls(id);
+        if (urls.length === 0 && pms.getPhotos) {
+          const rcId = await toRcId(id);
+          if (rcId) { try { urls = await pms.getPhotos(rcId); } catch { /* ignore */ } }
+        }
         if (urls.length === 0) return { error: 'Для этой квартиры пока нет фото' };
         if (!messenger.sendPhotos) return { error: 'Отправка фото недоступна в этом канале' };
         const c = await card(id);

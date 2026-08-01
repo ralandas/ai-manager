@@ -148,22 +148,28 @@ export class RealtyCalendarClient implements PmsConnector {
     };
     const created = await this.request<RcEventCalendar>('post', '/v2/event_calendars', body);
     if (!created?.id) throw new Error('RC createBooking: empty/invalid response');
-    return this.toBooking(created, input.propertyId);
+    return this.toBooking(created, input.propertyId, input.guests);
   }
 
   async getPaymentLink(bookingId: string): Promise<PaymentLink> {
     const ep = `/v2/event_calendars/${bookingId}/deposits`;
     // Try existing deposit first (GET), then create one (POST) — same as reference.
-    const existing = await this.request<RcDeposit>('get', ep);
-    if (existing?.payment_link) return { bookingId, url: existing.payment_link };
+    // RC returns existing deposits as { data: [ { payment_link, ... } ] } — the
+    // link is INSIDE data[0], not top-level. Reuse it if a deposit already exists
+    // (RC forbids a second deposit: 'Можно создать только один залог').
+    const existing = await this.request<RcDepositList>('get', ep);
+    const prior = existing?.data?.find((d) => d.payment_link)?.payment_link;
+    if (prior) return { bookingId, url: prior };
 
     const created = await this.request<RcDeposit>('post', ep, {
       note: 'auto',
       amount: this.creds.defaultDeposit ?? config.RC_DEFAULT_DEPOSIT,
       type: 'get_link',
     });
-    if (!created?.payment_link) throw new Error('RC getPaymentLink: no payment_link returned');
-    return { bookingId, url: created.payment_link };
+    // POST may echo the link at top level OR wrapped — handle both.
+    const link = created?.payment_link ?? (created as unknown as RcDepositList)?.data?.find((d) => d.payment_link)?.payment_link;
+    if (!link) throw new Error('RC getPaymentLink: no payment_link returned');
+    return { bookingId, url: link };
   }
 
   async getCheckouts(isoDate: string): Promise<Checkout[]> {
@@ -196,6 +202,21 @@ export class RealtyCalendarClient implements PmsConnector {
     return checkouts;
   }
 
+  async getPhotos(propertyId: string): Promise<string[]> {
+    // RC exposes photos on the NON-v2 detail endpoint /apartments/{id}
+    // (the /v2/apartments list has none). Each photo has file.file.url +
+    // large/xlarge/preview variants; we prefer 'large' for chat delivery.
+    const data = await this.request<RcApartmentDetail>('get', `/apartments/${propertyId}`);
+    const photos = data?.photos ?? [];
+    const urls: string[] = [];
+    for (const p of photos) {
+      const f = p?.file?.file;
+      const u = f?.large?.url ?? f?.url ?? f?.xlarge?.url;
+      if (u) urls.push(u);
+    }
+    return urls;
+  }
+
   // --- helpers ---
 
   private nights(checkIn: string, checkOut: string): number {
@@ -209,13 +230,13 @@ export class RealtyCalendarClient implements PmsConnector {
     return `${d}.${m}.${y}`;
   }
 
-  private toBooking(e: RcEventCalendar, propertyId: string): Booking {
+  private toBooking(e: RcEventCalendar, propertyId: string, guests = 1): Booking {
     return {
       id: String(e.id),
       propertyId,
       checkIn: e.begin_date,
       checkOut: e.end_date,
-      guests: 1,
+      guests,
       guestName: e.client?.fio ?? '',
       status: e.status === 'booked' ? 'confirmed' : 'pending',
       totalPrice: e.amount ?? 0,
@@ -258,4 +279,13 @@ interface RcEventCalendar {
 
 interface RcDeposit {
   payment_link?: string;
+}
+
+interface RcDepositList {
+  data?: Array<{ payment_link?: string }>;
+}
+
+interface RcApartmentDetail {
+  id: number;
+  photos?: Array<{ file?: { file?: { url?: string; large?: { url?: string }; xlarge?: { url?: string }; preview?: { url?: string } } } }>;
 }
