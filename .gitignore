@@ -33,11 +33,12 @@ data/photos/
 # Private guest chat screenshots — never commit (real PII + owner payment data)
 photos/
 
-# Owner business knowledge distilled from private chats (card number, box codes, wifi)
-knowledge/
 
 # Bnovo reverse-engineering dumps — live session cookie + guest PII, never commit
 bookings.json
 logs_network.txt
 bnovo_*.json
 logs2_metwork.txt
+
+# Bnovo raw reverse notes contain login/password — keep out of git
+knowledge/_bnovo_reverse.md
