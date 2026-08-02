@@ -49,15 +49,30 @@ export function buildTools(deps: {
 
   const ownerId = config.AGENT_OWNER_ID;
 
+  // Two owner modes:
+  //  - DB mode (e.g. RealtyCalendar pilot): apartments are curated cards in our
+  //    DB, each linked to an rc_apartment_id; the model uses OUR card ids.
+  //  - Direct-PMS mode (e.g. Bnovo): the PMS itself is the source of truth for
+  //    the apartment list; there are no DB cards. We pass propertyIds straight
+  //    through to the connector.
+  // We detect direct mode lazily: an owner with zero DB apartments is direct.
+  let directPmsCache: boolean | null = null;
+  const isDirectPms = async (): Promise<boolean> => {
+    if (!ownerId) return true; // no owner → legacy passthrough (already direct)
+    if (directPmsCache === null) {
+      directPmsCache = (await listOwnerApartments(ownerId)).length === 0;
+    }
+    return directPmsCache;
+  };
+
   // Load a card by our id (DB mode) — used to resolve rc id + info + price.
   const card = async (id: string): Promise<AptCard | null> =>
-    ownerId ? getApartmentCard(ownerId, id) : null;
+    ownerId && !(await isDirectPms()) ? getApartmentCard(ownerId, id) : null;
 
-  // Map the propertyId the model uses to the RC apartment id for PMS calls.
-  // In DB mode propertyId is our card id → resolve to rc_apartment_id.
-  // Without an owner set, pass through (legacy: propertyId already is the RC id).
+  // Map the propertyId the model uses to the PMS id for connector calls.
+  // DB mode: our card id → rc_apartment_id. Direct mode / no owner: pass through.
   const toRcId = async (propertyId: string): Promise<string | null> => {
-    if (!ownerId) return propertyId;
+    if (!ownerId || (await isDirectPms())) return propertyId;
     const c = await getApartmentCard(ownerId, propertyId);
     return c?.rcApartmentId ?? null;
   };
@@ -68,11 +83,13 @@ export function buildTools(deps: {
       description: 'Список доступных квартир с ценами.',
       parameters: { type: 'object', properties: {}, required: [] },
       handler: async () => {
-        if (ownerId) {
+        if (ownerId && !(await isDirectPms())) {
           const cards = await listOwnerApartments(ownerId);
           return cards.map((c) => ({ id: c.id, title: c.title, price: c.price }));
         }
-        return pms.listProperties();
+        // Direct-PMS (Bnovo) or legacy: the connector is the source of truth.
+        const props = await pms.listProperties();
+        return props.map((p) => ({ id: p.id, title: p.title, price: p.basePrice }));
       },
     },
     {
@@ -94,7 +111,8 @@ export function buildTools(deps: {
         const checkOut = a.checkOut as string;
         const guests = Number(a.guests);
 
-        if (!ownerId) {
+        if (!ownerId || (await isDirectPms())) {
+          // Direct-PMS (Bnovo) / legacy: ask the connector for the whole fund.
           return pms.checkAvailability({
             propertyId: a.propertyId as string | undefined,
             checkIn,
