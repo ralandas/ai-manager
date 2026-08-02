@@ -185,6 +185,26 @@ export class BnovoClient implements PmsConnector {
     }
   }
 
+  /** Raw text GET (for HTML pages like /roomTypes). Re-auths on session_expired. */
+  private async requestText(method: string, endpoint: string, retrying = false): Promise<string | null> {
+    if (!this.sid && !(await this.login())) return null;
+    try {
+      const res = await fetch(`${this.base}${endpoint}`, {
+        method,
+        headers: { Cookie: `SID=${this.sid ?? ''}`, 'User-Agent': this.ua, 'x-requested-with': 'XMLHttpRequest' },
+        signal: AbortSignal.timeout(30_000),
+      });
+      const text = await res.text();
+      if ((res.status === 401 || res.status === 403 || text.trim() === 'session_expired') && !retrying && (await this.login())) {
+        return this.requestText(method, endpoint, true);
+      }
+      return res.ok ? text : null;
+    } catch (err) {
+      logger.error({ endpoint, err }, 'Bnovo requestText threw');
+      return null;
+    }
+  }
+
   /** POST /planning/bookings — bookings + closures overlapping [dfrom, dto]. */
   private async fetchBookings(dfrom: string, dto: string): Promise<BnovoBookingsResponse> {
     const boundary = '----AIManagerBnovo' + dfrom.replace(/\D/g, '');
@@ -204,19 +224,55 @@ export class BnovoClient implements PmsConnector {
    * (verified: room_id 1222930 -> dual_roomtype_id 666444, the pair a real
    * /booking/add used). Built from a wide bookings window and cached.
    */
-  private roomsCache: Map<string, { roomTypeId: number; number: string }> | null = null;
+  private roomsCache: Map<string, { roomTypeId: number; number: string; name?: string }> | null =
+    null;
+  private namesCache: Map<string, string> | null = null;
 
-  private async rooms(): Promise<Map<string, { roomTypeId: number; number: string }>> {
+  /**
+   * Human room labels room_id -> name (e.g. "5кр3", "Бр37-1", "мох44") from the
+   * planning page's /roomTypes payload. These are the owner's own short labels
+   * shown on the chessboard — far better than the internal `number` code.
+   * Best-effort: if it fails we fall back to `number`.
+   */
+  private async roomNames(): Promise<Map<string, string>> {
+    if (this.namesCache) return this.namesCache;
+    const map = new Map<string, string>();
+    try {
+      const text = await this.requestText('get', '/roomTypes');
+      if (text) {
+        // The page embeds objects like {"id":"1299660",...,"name":"5кр3"}.
+        const re = /"id"\s*:\s*"?(\d+)"?[^{}]{0,80}?"name"\s*:\s*"([^"]{1,40})"/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text))) {
+          const id = m[1]!;
+          if (!map.has(id)) {
+            try {
+              map.set(id, JSON.parse(`"${m[2]}"`));
+            } catch {
+              map.set(id, m[2]!);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Bnovo roomNames fetch failed, falling back to codes');
+    }
+    this.namesCache = map;
+    return map;
+  }
+
+  private async rooms(): Promise<Map<string, { roomTypeId: number; number: string; name?: string }>> {
     if (this.roomsCache) return this.roomsCache;
     const today = new Date();
-    const { result } = await this.fetchBookings(
-      this.fmt(today),
-      this.fmt(new Date(today.getTime() + 365 * DAY_MS)),
-    );
-    const map = new Map<string, { roomTypeId: number; number: string }>();
+    const [{ result }, names] = await Promise.all([
+      this.fetchBookings(this.fmt(today), this.fmt(new Date(today.getTime() + 365 * DAY_MS))),
+      this.roomNames(),
+    ]);
+    const map = new Map<string, { roomTypeId: number; number: string; name?: string }>();
     for (const b of result) {
       if (b.room_id && b.dual_roomtype_id) {
-        map.set(String(b.room_id), { roomTypeId: b.dual_roomtype_id, number: b.number });
+        const rid = String(b.room_id);
+        map.set(rid, { roomTypeId: b.dual_roomtype_id, number: b.number, name: names.get(rid) });
       }
     }
     this.roomsCache = map;
@@ -234,13 +290,13 @@ export class BnovoClient implements PmsConnector {
   }
 
   async listProperties(): Promise<Property[]> {
-    // Room list derived from a wide bookings window (no clean rooms endpoint).
-    // `number` is Bnovo's internal code; human-friendly names would need a
-    // dedicated dictionary we haven't captured. propertyId = room_id.
+    // Room list from a wide bookings window. title = owner's short label from
+    // /roomTypes (e.g. "5кр3"), falling back to the internal `number` code.
+    // propertyId = room_id.
     const rooms = await this.rooms();
     return [...rooms].map(([room_id, r]) => ({
       id: room_id,
-      title: r.number,
+      title: r.name || r.number,
       basePrice: 0, // per-date price comes from checkAvailability
       maxGuests: 0,
     }));
