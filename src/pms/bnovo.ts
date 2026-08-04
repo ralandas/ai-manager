@@ -65,6 +65,15 @@ interface BnovoClosure {
   reason: string;
 }
 
+/** POST /roomTypes/get_room_presentation_data — address (in description) + photos. */
+interface BnovoPresentationResponse {
+  result: string; // "success"
+  data?: {
+    pms_room_type?: { name?: string; description?: string; adults?: string };
+    photos?: Array<{ url?: string }>;
+  };
+}
+
 interface BnovoBookingsResponse {
   result: BnovoBooking[];
   closures: BnovoClosure[];
@@ -227,6 +236,53 @@ export class BnovoClient implements PmsConnector {
   private roomsCache: Map<string, { roomTypeId: number; number: string; name?: string }> | null =
     null;
   private namesCache: Map<string, string> | null = null;
+  /** room_type_id -> presentation (address + photos), cached per process. */
+  private presCache = new Map<string, { address?: string; photos: string[] }>();
+  /** true once listProperties has enriched titles with real addresses. */
+  private addressesEnriched = false;
+
+  /**
+   * Presentation data for a room type: the guest-facing address (parsed from the
+   * owner's description) and the photo gallery. Source is the same endpoint the
+   * cabinet's "presentation" popup uses:
+   *   POST /roomTypes/get_room_presentation_data  { room_type_id }
+   *     -> { data: { pms_room_type: { name, description, adults }, photos: [{ url }] } }
+   * Cached per room type; best-effort (returns empty on failure).
+   */
+  private async presentation(roomTypeId: string): Promise<{ address?: string; photos: string[] }> {
+    const key = String(roomTypeId);
+    const cached = this.presCache.get(key);
+    if (cached) return cached;
+    let out: { address?: string; photos: string[] } = { photos: [] };
+    try {
+      const resp = await this.request<BnovoPresentationResponse>(
+        'post',
+        '/roomTypes/get_room_presentation_data?rp=vue',
+        { body: JSON.stringify({ room_type_id: key }), headers: { 'content-type': 'application/json' } },
+      );
+      if (resp?.result === 'success' && resp.data) {
+        const photos = (resp.data.photos ?? [])
+          .map((p) => p.url)
+          .filter((u): u is string => typeof u === 'string' && u.length > 0);
+        out = { address: this.parseAddress(resp.data.pms_room_type?.description), photos };
+      }
+    } catch (err) {
+      logger.warn({ roomTypeId, err }, 'Bnovo presentation fetch failed');
+    }
+    this.presCache.set(key, out);
+    return out;
+  }
+
+  /** Pull a clean street address from the owner's free-text description. */
+  private parseAddress(description?: string): string | undefined {
+    if (!description) return undefined;
+    // Owners write "Адрес:\n<street>" in the description; take that line.
+    const m = description.match(/Адрес:\s*\n?\s*([^\n]{4,80})/i);
+    const line = m?.[1]?.trim();
+    if (!line) return undefined;
+    // Strip trailing metro/section markers that sometimes share the line.
+    return line.replace(/\s*(Метро|Как добраться|Спальные).*/i, '').trim() || undefined;
+  }
 
   /**
    * Human room labels room_id -> name (e.g. "5кр3", "Бр37-1", "мох44") from the
@@ -290,16 +346,43 @@ export class BnovoClient implements PmsConnector {
   }
 
   async listProperties(): Promise<Property[]> {
-    // Room list from a wide bookings window. title = owner's short label from
-    // /roomTypes (e.g. "5кр3"), falling back to the internal `number` code.
-    // propertyId = room_id.
+    // Room list from a wide bookings window. propertyId = room_id.
+    // title preference: real street address (from the presentation popup) >
+    // owner's short label ("5кр3") > internal `number` code. Addresses make the
+    // agent read like the human owner ("ул. Богомягкова, 6") instead of codes.
     const rooms = await this.rooms();
+    await this.enrichAddresses(rooms);
     return [...rooms].map(([room_id, r]) => ({
       id: room_id,
-      title: r.name || r.number,
+      title: this.presCache.get(String(r.roomTypeId))?.address || r.name || r.number,
       basePrice: 0, // per-date price comes from checkAvailability
       maxGuests: 0,
     }));
+  }
+
+  /**
+   * Fetch presentation data (address + photos) for every distinct room type once
+   * per process and warm presCache. Bounded concurrency keeps it civil to Bnovo.
+   */
+  private async enrichAddresses(
+    rooms: Map<string, { roomTypeId: number; number: string; name?: string }>,
+  ): Promise<void> {
+    if (this.addressesEnriched) return;
+    this.addressesEnriched = true; // set first: a partial failure shouldn't loop
+    const typeIds = [...new Set([...rooms.values()].map((r) => String(r.roomTypeId)))];
+    const pending = typeIds.filter((id) => !this.presCache.has(id));
+    const CONCURRENCY = 6;
+    for (let i = 0; i < pending.length; i += CONCURRENCY) {
+      await Promise.all(pending.slice(i, i + CONCURRENCY).map((id) => this.presentation(id)));
+    }
+  }
+
+  /** Guest-facing photos for a room (by room_id). Resolves its room type first. */
+  async getPhotos(propertyId: string): Promise<string[]> {
+    const rooms = await this.rooms();
+    const entry = rooms.get(String(propertyId));
+    if (!entry) return [];
+    return (await this.presentation(String(entry.roomTypeId))).photos;
   }
 
   async checkAvailability(q: AvailabilityQuery): Promise<AvailabilityResult[]> {

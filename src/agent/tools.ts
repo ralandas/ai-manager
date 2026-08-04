@@ -276,9 +276,14 @@ export function buildTools(deps: {
         if (urls.length === 0) return { error: 'Для этой квартиры пока нет фото' };
         if (!messenger.sendPhotos) return { error: 'Отправка фото недоступна в этом канале' };
         const c = await card(id);
-        const caption = c
+        let caption = c
           ? `${c.title}${c.price ? ` — ${c.price} ₽/ночь` : ''}`
           : undefined;
+        // Direct-PMS (Bnovo): no DB card — label the gallery with the PMS title.
+        if (!caption) {
+          const p = (await pms.listProperties()).find((x) => x.id === id);
+          caption = p?.title;
+        }
         await messenger.sendPhotos(chatId, urls, caption);
         audit('send_apartment_photos', { chatId, propertyId: id, count: urls.length });
         return { ok: true, sent: urls.length };
