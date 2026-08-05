@@ -12,12 +12,16 @@ const schema = z.object({
   PUBLIC_URL: z.string().url().optional(),
   LOG_LEVEL: z.string().default('info'),
 
-  LLM_PROVIDER: z.enum(['gemini']).default('gemini'),
+  LLM_PROVIDER: z.enum(['gemini', 'wavespeed']).default('gemini'),
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default('gemini-flash-latest'),
   // Optional base URL override — point at the local gemini-proxy (:9090) when
   // Google's API is geo-blocked from the server. Empty = call Google directly.
   GEMINI_BASE_URL: z.string().optional(),
+  // WaveSpeed LLM (OpenAI-compatible chat completions with tool calling).
+  WAVESPEED_API_KEY: z.string().optional(),
+  WAVESPEED_MODEL: z.string().default('openai/gpt-5.4-mini'),
+  WAVESPEED_BASE_URL: z.string().default('https://llm.wavespeed.ai/v1'),
 
   MESSENGER: z.enum(['telegram', 'telegram-user', 'max']).default('telegram'),
   TELEGRAM_BOT_TOKEN: z.string().optional(),

@@ -6,6 +6,8 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { photosRoot } from './frontend/photos.js';
 import { GeminiProvider } from './llm/gemini.js';
+import { WaveSpeedProvider } from './llm/wavespeed.js';
+import type { LlmProvider } from './llm/types.js';
 import { TelegramMessenger } from './messenger/telegram.js';
 import { TelegramUserMessenger } from './messenger/telegram-user.js';
 import type { Messenger } from './messenger/types.js';
@@ -47,7 +49,9 @@ async function main() {
   const pms = config.AGENT_OWNER_ID
     ? await createPmsForOwner(config.AGENT_OWNER_ID)
     : createPms();
-  const llm = new GeminiProvider();
+  const llm: LlmProvider =
+    config.LLM_PROVIDER === 'wavespeed' ? new WaveSpeedProvider() : new GeminiProvider();
+  logger.info({ provider: config.LLM_PROVIDER }, 'LLM provider selected');
 
   // Legacy single-token admin API (kept for compatibility).
   registerAdminApi(app, pms);
