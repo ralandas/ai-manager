@@ -35,6 +35,14 @@ const schema = z.object({
     .string()
     .optional()
     .transform((v) => v === undefined || v === 'true' || v === '1'),
+  // Poll for new messages instead of relying on push updates. Needed when the
+  // account runs without its geo-proxy (direct IP): MTProto send/read still work
+  // but the update stream stays silent, so incoming messages must be polled.
+  TG_POLLING: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+  TG_POLL_INTERVAL_MS: z.coerce.number().optional(), // default 4000
 
   WAPI_BASE_URL: z.string().optional(),
   WAPI_TOKEN: z.string().optional(),

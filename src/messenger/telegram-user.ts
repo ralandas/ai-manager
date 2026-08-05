@@ -21,6 +21,10 @@ export class TelegramUserMessenger implements Messenger {
   readonly name = 'telegram' as const;
   private client!: TelegramClient;
   private readonly lock: SessionLock;
+  private pollTimer?: ReturnType<typeof setTimeout>;
+  private polling = false;
+  /** Highest message id already dispatched per chat — dedupes poll vs events. */
+  private readonly lastSeen = new Map<string, number>();
 
   constructor(private readonly onMessage: MessageHandler) {
     if (!config.TG_API_ID || !config.TG_API_HASH || !config.TG_SESSION) {
@@ -79,11 +83,70 @@ export class TelegramUserMessenger implements Messenger {
     }
 
     this.client.addEventHandler((e) => this.onEvent(e), new NewMessage({ incoming: true }));
+
+    // Direct-IP fallback: push updates may never arrive even though the session
+    // can send and read. Poll for new incoming messages in that case.
+    if (config.TG_POLLING) {
+      this.polling = true;
+      const interval = config.TG_POLL_INTERVAL_MS ?? 4000;
+      logger.info({ interval }, 'telegram-user: polling mode enabled');
+      const loop = async () => {
+        if (!this.polling) return;
+        try {
+          await this.pollOnce();
+        } catch (err) {
+          logger.error({ err }, 'telegram-user: poll cycle failed');
+        }
+        this.pollTimer = setTimeout(loop, interval);
+      };
+      // Seed lastSeen with the current top ids so we don't replay the backlog
+      // as if it were new; then start the loop.
+      await this.seedLastSeen().catch(() => {});
+      this.pollTimer = setTimeout(loop, interval);
+    }
   }
 
   private async onEvent(event: NewMessageEvent): Promise<void> {
+    const msg = event.message;
+    await this.handleMessage(msg);
+  }
+
+  /** One polling pass: scan private dialogs for unread incoming, dispatch, read. */
+  private async pollOnce(): Promise<void> {
+    const dialogs = await this.withTimeout(this.client.getDialogs({ limit: 30 }), 30_000, 'getDialogs');
+    const unread = dialogs.filter((d) => d.isUser && d.unreadCount > 0);
+    if (unread.length) {
+      logger.info(
+        { dialogs: unread.map((d) => `${d.name}:${d.unreadCount}`) },
+        'telegram-user: poll found unread',
+      );
+    }
+    for (const d of dialogs) {
+      if (!d.isUser || d.unreadCount <= 0 || !d.entity) continue;
+      const entity = d.entity;
+      const msgs = await this.client
+        .getMessages(entity, { limit: Math.min(d.unreadCount, 20) })
+        .catch(() => []);
+      // Oldest-first so a burst is handled in order.
+      const incoming = msgs.filter((m) => !m.out && m.message).reverse();
+      for (const m of incoming) await this.handleMessage(m);
+      await this.client.markAsRead(entity).catch(() => {});
+    }
+  }
+
+  /** Record the newest message id per dialog so polling only reacts to newer ones. */
+  private async seedLastSeen(): Promise<void> {
+    const dialogs = await this.client.getDialogs({ limit: 30 }).catch(() => []);
+    for (const d of dialogs) {
+      const id = d.message?.id;
+      const chatId = d.id?.toString();
+      if (id && chatId) this.lastSeen.set(chatId, id);
+    }
+  }
+
+  /** Shared dispatch for both event- and poll-sourced messages, deduped by id. */
+  private async handleMessage(msg: Api.Message): Promise<void> {
     try {
-      const msg = event.message;
       if (!msg?.message) return; // no text
 
       // Private, human-to-human only.
@@ -95,6 +158,11 @@ export class TelegramUserMessenger implements Messenger {
 
       const chatId = msg.chatId?.toString() ?? msg.senderId?.toString();
       if (!chatId) return;
+
+      // Dedupe: skip anything at or below the highest id already handled here.
+      const seen = this.lastSeen.get(chatId) ?? 0;
+      if (msg.id <= seen) return;
+      this.lastSeen.set(chatId, msg.id);
 
       const sender = await msg.getSender().catch(() => null);
       const senderName = sender instanceof Api.User ? sender.firstName ?? undefined : undefined;
@@ -140,6 +208,18 @@ export class TelegramUserMessenger implements Messenger {
         logger.error({ chatId, url: urls[i], err }, 'telegram-user: sendFile failed');
       }
     }
+  }
+
+  /** Stop polling and release the session lock (graceful shutdown). */
+  async stop(): Promise<void> {
+    this.polling = false;
+    if (this.pollTimer) clearTimeout(this.pollTimer);
+    try {
+      await this.client?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    this.lock.release();
   }
 
   private parseProxy(url?: string):
