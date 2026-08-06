@@ -340,7 +340,9 @@ export class BnovoClient implements PmsConnector {
     for (const b of result) {
       if (b.room_id && b.dual_roomtype_id) {
         const rid = String(b.room_id);
-        map.set(rid, { roomTypeId: b.dual_roomtype_id, number: b.number, name: names.get(rid) });
+        // dual_roomtype_id comes back as string for some rooms, number for
+        // others — normalize to a number so downstream matching is consistent.
+        map.set(rid, { roomTypeId: Number(b.dual_roomtype_id), number: b.number, name: names.get(rid) });
       }
     }
     this.roomsCache = map;
@@ -398,22 +400,22 @@ export class BnovoClient implements PmsConnector {
   }
 
   /**
-   * Total stay price per room, for the given dates, from
+   * Per-room stay prices for the given dates, from
    * POST /roomTypes/getRoomTypeVariation. Body param is `adultCustomerCount`
-   * (singular — the plural spelling is rejected). placings[0].price is the total
-   * for the whole range.
+   * (singular — plural is rejected). placings[0].price is the total for the range.
    *
-   * Keyed by the owner's short room label (roomtype_name, e.g. "Бр16-1"): the
-   * variation endpoint's roomtype_id is a DIFFERENT id space from bookings'
-   * dual_roomtype_id, but the human label matches what roomNames() gives us, so
-   * we join on that. Returns label -> total price; empty on failure.
+   * We build TWO indexes because the id relationship is inconsistent across
+   * rooms: `byTypeId` (variation roomtype_id -> price) matches when it equals a
+   * room's dual_roomtype_id, and `byLabel` (normalized roomtype_name -> price)
+   * matches on the human label. checkAvailability tries both.
    */
-  private async priceByLabel(
+  private async priceIndex(
     checkIn: string,
     checkOut: string,
     guests: number,
-  ): Promise<Map<string, number>> {
-    const out = new Map<string, number>();
+  ): Promise<{ byTypeId: Map<number, number>; byLabel: Map<string, number> }> {
+    const byTypeId = new Map<number, number>();
+    const byLabel = new Map<string, number>();
     const res = await this.request<BnovoVariationResponse>('post', '/roomTypes/getRoomTypeVariation', {
       body: JSON.stringify({
         adultCustomerCount: Math.max(1, guests),
@@ -428,11 +430,11 @@ export class BnovoClient implements PmsConnector {
     });
     for (const v of res?.data?.variation ?? []) {
       const price = v.placings?.[0]?.price;
-      if (v.roomtype_name && typeof price === 'number' && price > 0) {
-        out.set(this.normLabel(v.roomtype_name), price);
-      }
+      if (typeof price !== 'number' || price <= 0) continue;
+      if (v.roomtype_id != null) byTypeId.set(v.roomtype_id, price);
+      if (v.roomtype_name) byLabel.set(this.normLabel(v.roomtype_name), price);
     }
-    return out;
+    return { byTypeId, byLabel };
   }
 
   /** Normalize a room label for matching — labels differ in spacing/case across
@@ -463,23 +465,24 @@ export class BnovoClient implements PmsConnector {
     const all = await this.listProperties();
     const rooms = new Map(all.map((p) => [p.id, p.title]));
 
-    // Prices come keyed by the owner's short label; map each room_id to its
-    // label (from the rooms dict), then to its price.
-    const [dict, priceByLabel] = await Promise.all([
+    const [dict, prices] = await Promise.all([
       this.rooms(),
-      this.priceByLabel(q.checkIn, q.checkOut, q.guests),
+      this.priceIndex(q.checkIn, q.checkOut, q.guests),
     ]);
 
     const ids = q.propertyId ? [q.propertyId] : [...rooms.keys()];
     return ids.map((id) => {
       const entry = dict.get(id);
-      // Match price by the room's short label; fall back to its number code and
-      // to the title (some variation labels are addresses that equal our title).
       const title = rooms.get(id) ?? id;
+      // Try the room-type id first (matches when dual_roomtype_id lines up),
+      // then the label, its number code, and finally the address title.
+      // Coerce the type id to a number — Bnovo returns dual_roomtype_id as a
+      // string for some rooms and a number for others, and the index is numeric.
       const price =
-        (entry?.name && priceByLabel.get(this.normLabel(entry.name))) ||
-        (entry?.number && priceByLabel.get(this.normLabel(entry.number))) ||
-        priceByLabel.get(this.normLabel(title)) ||
+        (entry?.roomTypeId != null && prices.byTypeId.get(Number(entry.roomTypeId))) ||
+        (entry?.name && prices.byLabel.get(this.normLabel(entry.name))) ||
+        (entry?.number && prices.byLabel.get(this.normLabel(entry.number))) ||
+        prices.byLabel.get(this.normLabel(title)) ||
         undefined;
       return {
         propertyId: id,

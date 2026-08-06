@@ -378,10 +378,16 @@ export function buildTools(deps: {
           results.push({ propertyId: id, sent: Math.min(urls.length, MAX_PER_APT) });
         }
 
+        // Apartments beyond the per-request cap weren't sent — offer them next.
+        const remaining = valid.slice(MAX_APTS).map((id) => titles.get(id) ?? id);
         if (results.length === 0) {
           return { error: `Фото не найдены для: ${empty.join(', ') || ids.join(', ')}` };
         }
-        return { ok: true, sent: results, noPhotos: empty };
+        return {
+          ok: true,
+          sent: results.map((r) => titles.get(r.propertyId) ?? r.propertyId),
+          remaining, // not yet shown (cap) — ask the guest if they want more
+        };
       },
     },
     {
