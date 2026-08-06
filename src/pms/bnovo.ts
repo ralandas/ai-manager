@@ -65,6 +65,18 @@ interface BnovoClosure {
   reason: string;
 }
 
+/** POST /roomTypes/getRoomTypeVariation — per-room-type price for a date range. */
+interface BnovoVariationResponse {
+  result: string;
+  data?: {
+    variation?: Array<{
+      roomtype_id?: number;
+      roomtype_name?: string;
+      placings?: Array<{ price?: number; rooms_count?: number }>;
+    }>;
+  };
+}
+
 /** POST /roomTypes/get_room_presentation_data — address (in description) + photos. */
 interface BnovoPresentationResponse {
   result: string; // "success"
@@ -385,6 +397,50 @@ export class BnovoClient implements PmsConnector {
     return (await this.presentation(String(entry.roomTypeId))).photos;
   }
 
+  /**
+   * Total stay price per room, for the given dates, from
+   * POST /roomTypes/getRoomTypeVariation. Body param is `adultCustomerCount`
+   * (singular — the plural spelling is rejected). placings[0].price is the total
+   * for the whole range.
+   *
+   * Keyed by the owner's short room label (roomtype_name, e.g. "Бр16-1"): the
+   * variation endpoint's roomtype_id is a DIFFERENT id space from bookings'
+   * dual_roomtype_id, but the human label matches what roomNames() gives us, so
+   * we join on that. Returns label -> total price; empty on failure.
+   */
+  private async priceByLabel(
+    checkIn: string,
+    checkOut: string,
+    guests: number,
+  ): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const res = await this.request<BnovoVariationResponse>('post', '/roomTypes/getRoomTypeVariation', {
+      body: JSON.stringify({
+        adultCustomerCount: Math.max(1, guests),
+        childrenAges: {},
+        dateFrom: checkIn,
+        dateTo: checkOut,
+        planId: Number(this.planId),
+        isEarlyArrival: false,
+        isLateDeparture: false,
+      }),
+      headers: { 'content-type': 'application/json' },
+    });
+    for (const v of res?.data?.variation ?? []) {
+      const price = v.placings?.[0]?.price;
+      if (v.roomtype_name && typeof price === 'number' && price > 0) {
+        out.set(this.normLabel(v.roomtype_name), price);
+      }
+    }
+    return out;
+  }
+
+  /** Normalize a room label for matching — labels differ in spacing/case across
+   * endpoints ("Руб 2" vs "Руб2", "Сад (16)" vs "Сад(16)"). */
+  private normLabel(s: string): string {
+    return s.toLowerCase().replace(/\s+/g, '').replace(/[()]/g, '');
+  }
+
   async checkAvailability(q: AvailabilityQuery): Promise<AvailabilityResult[]> {
     const nights = this.nights(q.checkIn, q.checkOut);
 
@@ -407,16 +463,32 @@ export class BnovoClient implements PmsConnector {
     const all = await this.listProperties();
     const rooms = new Map(all.map((p) => [p.id, p.title]));
 
+    // Prices come keyed by the owner's short label; map each room_id to its
+    // label (from the rooms dict), then to its price.
+    const [dict, priceByLabel] = await Promise.all([
+      this.rooms(),
+      this.priceByLabel(q.checkIn, q.checkOut, q.guests),
+    ]);
+
     const ids = q.propertyId ? [q.propertyId] : [...rooms.keys()];
-    return ids.map((id) => ({
-      propertyId: id,
-      title: rooms.get(id) ?? id,
-      available: !busy.has(id),
-      nights,
-      // Price isn't reversed for Bnovo yet — omit it (0 would read as "0 ₽").
-      // The agent must not quote a number it doesn't have.
-      totalPrice: undefined,
-    }));
+    return ids.map((id) => {
+      const entry = dict.get(id);
+      // Match price by the room's short label; fall back to its number code and
+      // to the title (some variation labels are addresses that equal our title).
+      const title = rooms.get(id) ?? id;
+      const price =
+        (entry?.name && priceByLabel.get(this.normLabel(entry.name))) ||
+        (entry?.number && priceByLabel.get(this.normLabel(entry.number))) ||
+        priceByLabel.get(this.normLabel(title)) ||
+        undefined;
+      return {
+        propertyId: id,
+        title,
+        available: !busy.has(id),
+        nights,
+        totalPrice: price, // total for the whole stay; undefined if unknown
+      };
+    });
   }
 
   /**
