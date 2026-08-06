@@ -95,7 +95,7 @@ export function buildTools(deps: {
     {
       name: 'check_availability',
       description:
-        'Проверить доступность и рассчитать стоимость на даты. Даты в формате YYYY-MM-DD, checkOut — день выезда (не входит в оплату).',
+        'Проверить доступность и стоимость на даты. Даты YYYY-MM-DD, checkOut — день выезда. Если свободных много, можно сузить: area (район/улица, напр. "Невский", "Василеостровский") и/или maxPrice/minPrice (бюджет за весь период). Ответ содержит total (сколько всего свободно) и results (после фильтра).',
       parameters: {
         type: 'object',
         properties: {
@@ -103,6 +103,9 @@ export function buildTools(deps: {
           checkIn: { type: 'string', description: 'Дата заезда YYYY-MM-DD' },
           checkOut: { type: 'string', description: 'Дата выезда YYYY-MM-DD' },
           guests: { type: 'integer', description: 'Число гостей' },
+          area: { type: 'string', description: 'Фильтр по району/улице (подстрока адреса)' },
+          maxPrice: { type: 'integer', description: 'Не дороже этой суммы за весь период' },
+          minPrice: { type: 'integer', description: 'Не дешевле этой суммы за весь период' },
         },
         required: ['checkIn', 'checkOut', 'guests'],
       },
@@ -110,15 +113,30 @@ export function buildTools(deps: {
         const checkIn = a.checkIn as string;
         const checkOut = a.checkOut as string;
         const guests = Number(a.guests);
+        const area = a.area ? String(a.area).toLowerCase() : undefined;
+        const maxPrice = a.maxPrice ? Number(a.maxPrice) : undefined;
+        const minPrice = a.minPrice ? Number(a.minPrice) : undefined;
+
+        const applyFilters = (rows: Array<{ title: string; available: boolean; totalPrice?: number }>) => {
+          const availableRows = rows.filter((r) => r.available);
+          const total = availableRows.length;
+          let results = availableRows;
+          if (area) results = results.filter((r) => r.title.toLowerCase().includes(area));
+          if (maxPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice <= maxPrice);
+          if (minPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice >= minPrice);
+          return { total, filtered: results.length, results };
+        };
 
         if (!ownerId || (await isDirectPms())) {
           // Direct-PMS (Bnovo) / legacy: ask the connector for the whole fund.
-          return pms.checkAvailability({
+          const rows = await pms.checkAvailability({
             propertyId: a.propertyId as string | undefined,
             checkIn,
             checkOut,
             guests,
           });
+          if (a.propertyId) return rows; // specific room — return as-is
+          return applyFilters(rows);
         }
 
         // DB mode: build the list of cards to check, resolve each to its RC id.
