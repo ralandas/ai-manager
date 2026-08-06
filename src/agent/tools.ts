@@ -193,13 +193,26 @@ export function buildTools(deps: {
           checkIn: input.checkIn,
           checkOut: input.checkOut,
         });
-        const booking = await pms.createBooking({
-          propertyId: rcId,
-          guestName: a.guestName as string,
-          guestPhone: a.guestPhone as string | undefined,
-          idempotencyKey: key,
-          ...input,
-        });
+        let booking;
+        try {
+          booking = await pms.createBooking({
+            propertyId: rcId,
+            guestName: a.guestName as string,
+            guestPhone: a.guestPhone as string | undefined,
+            idempotencyKey: key,
+            ...input,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Overbooking guard (or PMS refusal): tell the model plainly so it
+          // offers other dates/apartments instead of retrying the same slot.
+          if (/refused|already booked|occupied|занят/i.test(msg)) {
+            return {
+              error: 'Эти даты на выбранной квартире уже заняты. Предложи гостю другие даты или другую квартиру — НЕ создавай бронь на занятые даты.',
+            };
+          }
+          return { error: `Не удалось создать бронь: ${msg}` };
+        }
         session.lastBookingId = booking.id;
         // Link the booking to this chat so we can DM the guest before checkout.
         rememberBookingContact({

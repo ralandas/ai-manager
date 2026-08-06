@@ -417,6 +417,30 @@ export class BnovoClient implements PmsConnector {
     }));
   }
 
+  /**
+   * Fresh occupancy check for ONE room over [checkIn, checkOut) — no caching.
+   * Queries bookings + closures for the window and tests overlap. Used as the
+   * pre-create overbooking guard (force:true would otherwise stack bookings).
+   */
+  private async isRoomFree(roomId: string, checkIn: string, checkOut: string): Promise<boolean> {
+    const { result, closures } = await this.fetchBookings(checkIn, checkOut);
+    for (const b of result) {
+      if (
+        String(b.room_id) === roomId &&
+        this.overlaps(this.isoDay(b.real_arrival), this.isoDay(b.real_departure), checkIn, checkOut)
+      ) {
+        return false;
+      }
+    }
+    for (const c of closures) {
+      if (String(c.room_id) !== roomId) continue;
+      const from = this.ddmmyyyyToIso(c.date_from);
+      const to = this.ddmmyyyyToIso(c.date_to);
+      if (from && to && this.overlaps(from, to, checkIn, checkOut)) return false;
+    }
+    return true;
+  }
+
   async createBooking(input: CreateBookingInput): Promise<Booking> {
     // propertyId is the room_id; Bnovo needs the room_type_id too, which we map
     // from the rooms dictionary (room_id -> dual_roomtype_id). Also accept an
@@ -435,6 +459,20 @@ export class BnovoClient implements PmsConnector {
       if (!entry) throw new Error(`Bnovo createBooking: unknown room_id ${raw}`);
       roomTypeId = entry.roomTypeId;
     }
+    // Guard against overbooking: /booking/add is sent with force:true (Bnovo
+    // otherwise rejects perfectly valid same-category bookings), which means it
+    // will HappilY create a booking on top of an occupied room. So we re-check
+    // occupancy right before creating and refuse if the room is taken for the
+    // requested dates. This is the last line of defence against a double-booking
+    // between check_availability and create (stale data, races, the model
+    // picking a busy room).
+    const freshlyFree = await this.isRoomFree(String(roomId), input.checkIn, input.checkOut);
+    if (!freshlyFree) {
+      throw new Error(
+        `Bnovo createBooking refused: room ${roomId} is already booked for ${input.checkIn}..${input.checkOut}`,
+      );
+    }
+
     const parts = input.guestName.trim().split(/\s+/);
     const surname = parts[0] ?? input.guestName;
     const name = parts.slice(1).join(' ') || surname;
