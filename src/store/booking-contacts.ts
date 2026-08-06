@@ -22,6 +22,10 @@ export interface BookingContact {
   checkOut: string;
   /** Guest-confirmed exact checkout time, once known (e.g. "11:30"). */
   checkoutTime?: string;
+  /** Epoch ms when the booking was created — bounds how long we poll payment. */
+  createdAt?: number;
+  /** Set once we've told the guest their payment arrived (dedupe the notice). */
+  paidNotified?: boolean;
 }
 
 function load(): Record<string, BookingContact> {
@@ -54,6 +58,14 @@ export function setCheckoutTime(bookingId: string, time: string): void {
   const existing = all[bookingId];
   if (!existing) return;
   existing.checkoutTime = time;
+  save(all);
+}
+
+export function markPaidNotified(bookingId: string): void {
+  const all = load();
+  const existing = all[bookingId];
+  if (!existing) return;
+  existing.paidNotified = true;
   save(all);
 }
 

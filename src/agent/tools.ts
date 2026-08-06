@@ -221,6 +221,7 @@ export function buildTools(deps: {
           guestName: booking.guestName,
           propertyId: booking.propertyId,
           checkOut: booking.checkOut,
+          createdAt: Date.now(),
         });
         audit('create_booking', { chatId, bookingId: booking.id, ...input });
         await notifyOwner(

@@ -15,6 +15,7 @@ import { createPms } from './pms/index.js';
 import { createPmsForOwner } from './pms/for-owner.js';
 import { Agent } from './agent/agent.js';
 import { Housekeeping, scheduleDaily } from './housekeeping.js';
+import { startPaymentWatcher } from './payment-watcher.js';
 import { registerFrontend } from './frontend/routes.js';
 import { registerAdminApi } from './frontend/admin-api.js';
 import { registerOwnerApi } from './api/apartments.js';
@@ -79,6 +80,9 @@ async function main() {
   scheduleDaily(18, () => housekeeping.remindGuestsAboutCheckout());
   // ...then post the cleaners' prep list (with any confirmed times).
   scheduleDaily(21, () => housekeeping.postTomorrowForecast());
+
+  // Poll invoices so the bot notices payment without the guest having to say so.
+  startPaymentWatcher({ pms, messenger });
 
   // Manual triggers (test without waiting for the scheduled hour).
   app.post('/admin/forecast', async () => {
