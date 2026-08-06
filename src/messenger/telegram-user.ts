@@ -26,6 +26,8 @@ export class TelegramUserMessenger implements Messenger {
   private polling = false;
   /** Highest message id already dispatched per chat — dedupes poll vs events. */
   private readonly lastSeen = new Map<string, number>();
+  /** Serializes all outbound sends so bursts can't trip Telegram's rate limit. */
+  private sendChain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly onMessage: MessageHandler) {
     if (!config.TG_API_ID || !config.TG_API_HASH || !config.TG_SESSION) {
@@ -181,16 +183,44 @@ export class TelegramUserMessenger implements Messenger {
     }
   }
 
+  /**
+   * Run a send through a single global queue with a small gap between sends and
+   * automatic FloodWait handling. Fresh accounts have strict media limits; a
+   * burst of albums otherwise returns FloodWaitError and the send is lost. By
+   * serializing + honouring the wait (up to a cap) we spread sends out and
+   * retry once the wait elapses instead of dropping the message.
+   */
+  private enqueueSend<T>(label: string, fn: () => Promise<T>, chatId?: string): Promise<T | undefined> {
+    const GAP_MS = 3000; // spacing between consecutive sends
+    const MAX_FLOOD_WAIT_S = 300; // wait out floods up to 5 min; longer -> give up
+    const run = async (): Promise<T | undefined> => {
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const out = await this.withTimeout(fn(), 120_000, label);
+          await new Promise((r) => setTimeout(r, GAP_MS));
+          return out;
+        } catch (err) {
+          const wait = (err as { seconds?: number })?.seconds;
+          const isFlood = (err as { errorMessage?: string })?.errorMessage === 'FLOOD' || wait != null;
+          if (isFlood && wait && wait <= MAX_FLOOD_WAIT_S && attempt === 1) {
+            logger.warn({ label, chatId, wait }, 'telegram-user: FloodWait — waiting then retrying');
+            await new Promise((r) => setTimeout(r, (wait + 1) * 1000));
+            continue;
+          }
+          logger.error({ label, chatId, err }, 'telegram-user: send failed');
+          return undefined;
+        }
+      }
+      return undefined;
+    };
+    // Chain onto the queue; never let one failure break the chain.
+    const next = this.sendChain.then(run, run) as Promise<T | undefined>;
+    this.sendChain = next.catch(() => undefined);
+    return next;
+  }
+
   async sendMessage(chatId: string, text: string): Promise<void> {
-    try {
-      await this.withTimeout(
-        this.client.sendMessage(chatId, { message: text }),
-        30_000,
-        'sendMessage',
-      );
-    } catch (err) {
-      logger.error({ chatId, err }, 'telegram-user: sendMessage failed');
-    }
+    await this.enqueueSend('sendMessage', () => this.client.sendMessage(chatId, { message: text }), chatId);
   }
 
   async sendPhotos(chatId: string, urls: string[], caption?: string): Promise<void> {
@@ -198,12 +228,13 @@ export class TelegramUserMessenger implements Messenger {
     // Send as ONE album (media group). Telegram caps an album at 10 items.
     // We download each image ourselves and upload the bytes: passing bnovo URLs
     // straight to Telegram fails MEDIA_INVALID for a group (it can't fetch them
-    // in time), and sending photos one-by-one tripped FloodWaitError. One album
-    // = one grouped, captioned gallery per apartment, and one rate-limit unit.
+    // in time). Album = one grouped, captioned gallery + one rate-limit unit.
+    // The enqueueSend queue spaces albums out and rides out FloodWaits.
     const ALBUM_MAX = 10;
     const batch = urls.slice(0, ALBUM_MAX);
+    let files: CustomFile[];
     try {
-      const files = await Promise.all(
+      files = await Promise.all(
         batch.map(async (url, i) => {
           const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
           if (!res.ok) throw new Error(`fetch ${url} -> ${res.status}`);
@@ -211,14 +242,11 @@ export class TelegramUserMessenger implements Messenger {
           return new CustomFile(`photo_${i}.jpg`, buf.length, '', buf);
         }),
       );
-      await this.withTimeout(
-        this.client.sendFile(chatId, { file: files, caption }),
-        120_000,
-        'sendAlbum',
-      );
     } catch (err) {
-      logger.error({ chatId, count: batch.length, err }, 'telegram-user: sendPhotos album failed');
+      logger.error({ chatId, err }, 'telegram-user: photo download failed');
+      return;
     }
+    await this.enqueueSend('sendAlbum', () => this.client.sendFile(chatId, { file: files, caption }), chatId);
   }
 
   /** Stop polling and release the session lock (graceful shutdown). */

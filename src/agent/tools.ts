@@ -312,8 +312,11 @@ export function buildTools(deps: {
         ].filter(Boolean);
         if (ids.length === 0) return { error: 'Укажи propertyId или propertyIds' };
 
-        const MAX_APTS = 4; // don't flood the chat / trip Telegram's rate limit
-        const MAX_PER_APT = 10; // one album per apartment (Telegram album cap)
+        // Keep the volume modest — fresh Telegram accounts have tight media
+        // limits. Fewer photos per apartment + fewer apartments per request
+        // keeps us well under FloodWait; the messenger queue spaces them out.
+        const MAX_APTS = 3;
+        const MAX_PER_APT = 5;
         const titles = new Map((await pms.listProperties()).map((p) => [p.id, p.title]));
 
         const results: Array<{ propertyId: string; sent: number }> = [];
@@ -321,8 +324,6 @@ export function buildTools(deps: {
         const chosen = ids.slice(0, MAX_APTS);
         for (let i = 0; i < chosen.length; i++) {
           const id = chosen[i]!;
-          // Small gap between albums so several apartments don't trip FloodWait.
-          if (i > 0) await new Promise((r) => setTimeout(r, 1500));
           // 1) local photos (admin upload), 2) fallback — PMS photos.
           let urls = listPhotoUrls(id);
           if (urls.length === 0 && pms.getPhotos) {
