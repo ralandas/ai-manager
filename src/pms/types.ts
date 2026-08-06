@@ -27,8 +27,8 @@ export interface AvailabilityResult {
   title: string;
   available: boolean;
   nights: number;
-  /** Total price for the stay in minor units, if computable. */
-  totalPrice: number;
+  /** Total price for the stay, if the PMS exposes it (omitted when unknown). */
+  totalPrice?: number;
 }
 
 export interface CreateBookingInput {

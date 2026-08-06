@@ -413,7 +413,9 @@ export class BnovoClient implements PmsConnector {
       title: rooms.get(id) ?? id,
       available: !busy.has(id),
       nights,
-      totalPrice: 0, // price enrichment via /tariff/getAvailable is a follow-up
+      // Price isn't reversed for Bnovo yet — omit it (0 would read as "0 ₽").
+      // The agent must not quote a number it doesn't have.
+      totalPrice: undefined,
     }));
   }
 
