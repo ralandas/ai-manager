@@ -619,10 +619,49 @@ export class BnovoClient implements PmsConnector {
     return res !== null;
   }
 
-  async getPaymentLink(_bookingId: string): Promise<PaymentLink> {
-    // Bnovo cabinet has no self-serve payment-link endpoint in what we reversed.
-    // Payment for Bnovo owners is handled out-of-band (owner's own flow).
-    throw new Error('Bnovo: ссылка на оплату не поддерживается кабинетом (оплата вне PMS)');
+  /**
+   * The online-invoice id Bnovo auto-creates for a booking. Prepayment for the
+   * first night is generated automatically; we read it from getInvoices
+   * (data.invoices.online[0]). Returns null if none exists yet.
+   */
+  private async firstInvoiceId(bookingId: string): Promise<number | null> {
+    const res = await this.request<{
+      result: string;
+      data?: { invoices?: { online?: Array<{ id?: number }> } };
+    }>('post', '/booking/getInvoices', {
+      body: JSON.stringify({ bookingId }),
+      headers: { 'content-type': 'application/json' },
+    });
+    return res?.data?.invoices?.online?.[0]?.id ?? null;
+  }
+
+  async getPaymentLink(bookingId: string): Promise<PaymentLink> {
+    // Bnovo auto-creates an online invoice (first-night prepayment). Its public
+    // pay page lives at payment.bnovo.ru; the cabinet hands out that URL via
+    // /invoices/invoice_pdf_link?invoice_id=... (the "Поделиться" button).
+    const invoiceId = await this.firstInvoiceId(bookingId);
+    if (!invoiceId) {
+      throw new Error(`Bnovo getPaymentLink: no online invoice for booking ${bookingId}`);
+    }
+    const res = await this.request<{ result: string; url?: string }>(
+      'get',
+      `/invoices/invoice_pdf_link?invoice_id=${invoiceId}`,
+    );
+    const url = res?.url;
+    if (!url) throw new Error(`Bnovo getPaymentLink: no url for invoice ${invoiceId}`);
+    return { bookingId, url };
+  }
+
+  /**
+   * Has the guest paid anything on this booking? The invoice page exposes a
+   * hidden `has_not_null_payments` flag (0 = nothing paid, 1 = a payment
+   * exists). We read the page and parse that — no JSON endpoint exposes it.
+   */
+  async isBookingPaid(bookingId: string): Promise<boolean> {
+    const html = await this.requestText('get', `/booking/invoices/${bookingId}/`);
+    if (!html) return false;
+    const m = html.match(/has_not_null_payments"[^>]*value="(\d+)"/);
+    return m ? Number(m[1]) > 0 : false;
   }
 
   async getCheckouts(isoDate: string): Promise<Checkout[]> {

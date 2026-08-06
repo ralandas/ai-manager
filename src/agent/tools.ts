@@ -250,6 +250,26 @@ export function buildTools(deps: {
       },
     },
     {
+      name: 'check_payment',
+      description:
+        'Проверить, оплатил ли гость бронь (внесён ли платёж по счёту). Если bookingId не указан — берётся бронь этого диалога. Вызывай, когда гость говорит «оплатил»/«скинул», чтобы подтвердить.',
+      parameters: {
+        type: 'object',
+        properties: {
+          bookingId: { type: 'string', description: 'ID брони; можно опустить для брони этого диалога' },
+        },
+        required: [],
+      },
+      handler: async (a) => {
+        const bookingId = (a.bookingId as string | undefined) ?? session.lastBookingId;
+        if (!bookingId) return { error: 'В этом диалоге ещё нет созданной брони' };
+        if (!pms.isBookingPaid) return { error: 'Проверка оплаты недоступна для этого объекта' };
+        const paid = await pms.isBookingPaid(bookingId);
+        audit('check_payment', { chatId, bookingId, paid });
+        return { bookingId, paid };
+      },
+    },
+    {
       name: 'get_apartment_info',
       description:
         'Ссылка на страницу квартиры с правилами проживания и инструкцией по заселению. Дай её клиенту вместо пересказа правил текстом.',

@@ -77,4 +77,6 @@ export interface PmsConnector {
   getCheckouts(isoDate: string): Promise<Checkout[]>;
   /** Photo URLs for a property, pulled from the PMS itself (optional). */
   getPhotos?(propertyId: string): Promise<string[]>;
+  /** Whether the booking has any payment recorded (optional; PMS-specific). */
+  isBookingPaid?(bookingId: string): Promise<boolean>;
 }
