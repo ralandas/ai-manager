@@ -471,26 +471,48 @@ export class BnovoClient implements PmsConnector {
     ]);
 
     const ids = q.propertyId ? [q.propertyId] : [...rooms.keys()];
-    return ids.map((id) => {
+    const priceFor = (id: string, title: string): number | undefined => {
       const entry = dict.get(id);
-      const title = rooms.get(id) ?? id;
       // Try the room-type id first (matches when dual_roomtype_id lines up),
       // then the label, its number code, and finally the address title.
       // Coerce the type id to a number — Bnovo returns dual_roomtype_id as a
       // string for some rooms and a number for others, and the index is numeric.
-      const price =
+      return (
         (entry?.roomTypeId != null && prices.byTypeId.get(Number(entry.roomTypeId))) ||
         (entry?.name && prices.byLabel.get(this.normLabel(entry.name))) ||
         (entry?.number && prices.byLabel.get(this.normLabel(entry.number))) ||
         prices.byLabel.get(this.normLabel(title)) ||
-        undefined;
-      return {
-        propertyId: id,
-        title,
-        available: !busy.has(id),
-        nights,
-        totalPrice: price, // total for the whole stay; undefined if unknown
-      };
+        undefined
+      );
+    };
+
+    const rows = ids.map((id) => {
+      const title = rooms.get(id) ?? id;
+      return { propertyId: id, title, available: !busy.has(id), nights, totalPrice: priceFor(id, title) };
+    });
+
+    // A specific room was asked for — return it as-is (no dedup).
+    if (q.propertyId) return rows;
+
+    // Bnovo lists several physical rooms under the same address (e.g. three
+    // "Владимирский проспект 10"). Collapse duplicates so the guest sees each
+    // distinct offer once, keyed by (address + price): different prices at one
+    // address ARE different flats (Бр16-1 10000 vs Бр16-2 13000) and stay
+    // separate; identical ones fold into a single, preferably-available entry.
+    const seen = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) {
+      const key = `${r.title}|${r.totalPrice ?? '?'}`;
+      const prev = seen.get(key);
+      if (!prev || (!prev.available && r.available)) seen.set(key, r);
+    }
+    // Disambiguate same-address entries that survived on different prices.
+    const byTitle = new Map<string, number>();
+    for (const r of seen.values()) byTitle.set(r.title, (byTitle.get(r.title) ?? 0) + 1);
+    return [...seen.values()].map((r) => {
+      if ((byTitle.get(r.title) ?? 0) > 1 && r.totalPrice) {
+        return { ...r, title: `${r.title} (${Math.round(r.totalPrice / Math.max(1, r.nights))}₽/ночь)` };
+      }
+      return r;
     });
   }
 
