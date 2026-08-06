@@ -41,7 +41,7 @@ export function startPaymentWatcher(deps: {
         const name = c.guestName?.split(/\s+/).slice(1).join(' ') || c.guestName || '';
         await messenger.sendMessage(
           c.chatId,
-          `${name ? name + ', о' : 'О'}плату вижу — спасибо 👍 В день заезда пришлю инструкцию по заселению.`,
+          `${name ? name + ', о' : 'О'}плату вижу — спасибо 👍 Бронь подтверждена.`,
         );
         markPaidNotified(c.bookingId);
         logger.info({ bookingId: c.bookingId, chatId: c.chatId }, 'payment-watcher: payment detected, guest notified');
