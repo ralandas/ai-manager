@@ -291,36 +291,63 @@ export function buildTools(deps: {
     {
       name: 'send_apartment_photos',
       description:
-        'Отправить клиенту фото квартиры с подписью (название + цена за ночь). Вызывай, когда клиент просит фото или чтобы показать вариант нагляднее.',
+        'Отправить клиенту фото квартир с подписью (адрес + цена). Передай propertyId (одна квартира) ИЛИ propertyIds (несколько — например все показанные варианты). ID бери из check_availability/list_properties. НЕ говори, что фото нет, не вызвав этот инструмент.',
       parameters: {
         type: 'object',
         properties: {
-          propertyId: { type: 'string', description: 'ID квартиры' },
+          propertyId: { type: 'string', description: 'ID одной квартиры' },
+          propertyIds: {
+            type: 'string',
+            description: 'Несколько ID через запятую — отправить фото по каждой квартире',
+          },
         },
-        required: ['propertyId'],
+        required: [],
       },
       handler: async (a) => {
-        const id = a.propertyId as string;
-        // 1) локальные фото (загруженные через админку), 2) фолбэк — фото из PMS.
-        let urls = listPhotoUrls(id);
-        if (urls.length === 0 && pms.getPhotos) {
-          const rcId = await toRcId(id);
-          if (rcId) { try { urls = await pms.getPhotos(rcId); } catch { /* ignore */ } }
-        }
-        if (urls.length === 0) return { error: 'Для этой квартиры пока нет фото' };
         if (!messenger.sendPhotos) return { error: 'Отправка фото недоступна в этом канале' };
-        const c = await card(id);
-        let caption = c
-          ? `${c.title}${c.price ? ` — ${c.price} ₽/ночь` : ''}`
-          : undefined;
-        // Direct-PMS (Bnovo): no DB card — label the gallery with the PMS title.
-        if (!caption) {
-          const p = (await pms.listProperties()).find((x) => x.id === id);
-          caption = p?.title;
+        // Accept one id or a comma-separated list; cap the fan-out.
+        const ids = [
+          ...(a.propertyId ? [String(a.propertyId)] : []),
+          ...(a.propertyIds ? String(a.propertyIds).split(',').map((s) => s.trim()) : []),
+        ].filter(Boolean);
+        if (ids.length === 0) return { error: 'Укажи propertyId или propertyIds' };
+
+        const MAX_APTS = 5; // don't flood the chat
+        const MAX_PER_APT = 6; // a handful of photos per apartment is enough
+        const titles = new Map((await pms.listProperties()).map((p) => [p.id, p.title]));
+
+        const results: Array<{ propertyId: string; sent: number }> = [];
+        const empty: string[] = [];
+        for (const id of ids.slice(0, MAX_APTS)) {
+          // 1) local photos (admin upload), 2) fallback — PMS photos.
+          let urls = listPhotoUrls(id);
+          if (urls.length === 0 && pms.getPhotos) {
+            const rcId = await toRcId(id);
+            if (rcId) {
+              try {
+                urls = await pms.getPhotos(rcId);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+          if (urls.length === 0) {
+            empty.push(titles.get(id) ?? id);
+            continue;
+          }
+          const c = await card(id);
+          const caption = c
+            ? `${c.title}${c.price ? ` — ${c.price} ₽/ночь` : ''}`
+            : titles.get(id);
+          await messenger.sendPhotos(chatId, urls.slice(0, MAX_PER_APT), caption);
+          audit('send_apartment_photos', { chatId, propertyId: id, count: Math.min(urls.length, MAX_PER_APT) });
+          results.push({ propertyId: id, sent: Math.min(urls.length, MAX_PER_APT) });
         }
-        await messenger.sendPhotos(chatId, urls, caption);
-        audit('send_apartment_photos', { chatId, propertyId: id, count: urls.length });
-        return { ok: true, sent: urls.length };
+
+        if (results.length === 0) {
+          return { error: `Фото не найдены для: ${empty.join(', ') || ids.join(', ')}` };
+        }
+        return { ok: true, sent: results, noPhotos: empty };
       },
     },
     {
