@@ -20,7 +20,7 @@ const schema = z.object({
   GEMINI_BASE_URL: z.string().optional(),
   // WaveSpeed LLM (OpenAI-compatible chat completions with tool calling).
   WAVESPEED_API_KEY: z.string().optional(),
-  WAVESPEED_MODEL: z.string().default('openai/gpt-5.4-mini'),
+  WAVESPEED_MODEL: z.string().default('deepseek/deepseek-v4-flash'),
   WAVESPEED_BASE_URL: z.string().default('https://llm.wavespeed.ai/v1'),
 
   MESSENGER: z.enum(['telegram', 'telegram-user', 'max']).default('telegram'),
