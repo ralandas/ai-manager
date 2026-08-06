@@ -291,37 +291,66 @@ export function buildTools(deps: {
     {
       name: 'send_apartment_photos',
       description:
-        'Отправить клиенту фото квартир с подписью (адрес + цена). Передай propertyId (одна квартира) ИЛИ propertyIds (несколько — например все показанные варианты). ID бери из check_availability/list_properties. НЕ говори, что фото нет, не вызвав этот инструмент.',
+        'Отправить клиенту фото квартир с подписью (адрес + цена). Проще всего передай query — адрес(а) квартир через запятую, как ты их показывал гостю (напр. "Бронницкая 16, Рубинштейна 24"). Можно и propertyId/propertyIds. НЕ говори, что фото нет, не вызвав этот инструмент.',
       parameters: {
         type: 'object',
         properties: {
-          propertyId: { type: 'string', description: 'ID одной квартиры' },
+          query: {
+            type: 'string',
+            description: 'Адрес(а) квартир через запятую (как показывал гостю) — найду по названию',
+          },
+          propertyId: { type: 'string', description: 'ID одной квартиры (если знаешь точно)' },
           propertyIds: {
             type: 'string',
-            description: 'Несколько ID через запятую — отправить фото по каждой квартире',
+            description: 'Несколько ID через запятую',
           },
         },
         required: [],
       },
       handler: async (a) => {
         if (!messenger.sendPhotos) return { error: 'Отправка фото недоступна в этом канале' };
-        // Accept one id or a comma-separated list; cap the fan-out.
+        const props = await pms.listProperties();
+        const titles = new Map(props.map((p) => [p.id, p.title]));
+        // Token-based match: every significant token of the query (street word +
+        // house number) must appear in the title. Handles "Бронницкая 16" vs
+        // "Бронницкая улица 16" where a plain substring check fails.
+        const tokens = (s: string) =>
+          s
+            .toLowerCase()
+            .replace(/[^a-zа-я0-9\s]/gi, ' ')
+            .split(/\s+/)
+            .filter((t) => t.length >= 2 && !['улица','проспект','переулок','дом','канала','набережная','остров','острова'].includes(t));
+
         const ids = [
           ...(a.propertyId ? [String(a.propertyId)] : []),
           ...(a.propertyIds ? String(a.propertyIds).split(',').map((s) => s.trim()) : []),
         ].filter(Boolean);
-        if (ids.length === 0) return { error: 'Укажи propertyId или propertyIds' };
+        if (a.query) {
+          for (const term of String(a.query).split(',').map((s) => s.trim()).filter(Boolean)) {
+            const qt = tokens(term);
+            if (qt.length === 0) continue;
+            const hit = props.find((p) => {
+              const tt = new Set(tokens(p.title));
+              return qt.every((t) => tt.has(t));
+            });
+            if (hit && !ids.includes(hit.id)) ids.push(hit.id);
+          }
+        }
+        // Drop anything that isn't a real property id (model may hallucinate).
+        const valid = ids.filter((id) => titles.has(id));
+        if (valid.length === 0) {
+          return { error: 'Не нашёл эти квартиры. Передай query с адресом как в check_availability.' };
+        }
 
         // Keep the volume modest — fresh Telegram accounts have tight media
         // limits. Fewer photos per apartment + fewer apartments per request
         // keeps us well under FloodWait; the messenger queue spaces them out.
         const MAX_APTS = 3;
         const MAX_PER_APT = 5;
-        const titles = new Map((await pms.listProperties()).map((p) => [p.id, p.title]));
 
         const results: Array<{ propertyId: string; sent: number }> = [];
         const empty: string[] = [];
-        const chosen = ids.slice(0, MAX_APTS);
+        const chosen = valid.slice(0, MAX_APTS);
         for (let i = 0; i < chosen.length; i++) {
           const id = chosen[i]!;
           // 1) local photos (admin upload), 2) fallback — PMS photos.
