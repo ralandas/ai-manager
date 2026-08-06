@@ -329,11 +329,13 @@ export function buildTools(deps: {
           for (const term of String(a.query).split(',').map((s) => s.trim()).filter(Boolean)) {
             const qt = tokens(term);
             if (qt.length === 0) continue;
-            const hit = props.find((p) => {
+            // Match ALL apartments at this address, not just the first — one
+            // address can be several distinct flats (Бронницкая 16 has two).
+            const hits = props.filter((p) => {
               const tt = new Set(tokens(p.title));
               return qt.every((t) => tt.has(t));
             });
-            if (hit && !ids.includes(hit.id)) ids.push(hit.id);
+            for (const hit of hits) if (!ids.includes(hit.id)) ids.push(hit.id);
           }
         }
         // Drop anything that isn't a real property id (model may hallucinate).
@@ -345,12 +347,32 @@ export function buildTools(deps: {
         // Keep the volume modest — fresh Telegram accounts have tight media
         // limits. Fewer photos per apartment + fewer apartments per request
         // keeps us well under FloodWait; the messenger queue spaces them out.
-        const MAX_APTS = 3;
+        const MAX_APTS = 4;
         const MAX_PER_APT = 5;
 
         const results: Array<{ propertyId: string; sent: number }> = [];
         const empty: string[] = [];
         const chosen = valid.slice(0, MAX_APTS);
+
+        // If any chosen apartments share an address, the caption must carry the
+        // price to tell them apart (e.g. two "Бронницкая 16" at 10000 / 13000).
+        const titleCount = new Map<string, number>();
+        for (const id of chosen) {
+          const t = titles.get(id) ?? id;
+          titleCount.set(t, (titleCount.get(t) ?? 0) + 1);
+        }
+        const priceById = new Map<string, number | undefined>();
+        if ([...titleCount.values()].some((n) => n > 1) && pms.getPhotos) {
+          // Cheap way to get per-room price: query availability for these ids.
+          for (const id of chosen) {
+            try {
+              const rc = await toRcId(id);
+              const av = rc ? await pms.checkAvailability({ propertyId: rc, checkIn: new Date().toISOString().slice(0, 10), checkOut: new Date(Date.now() + 86400000).toISOString().slice(0, 10), guests: 1 }) : [];
+              priceById.set(id, av[0]?.totalPrice);
+            } catch { /* ignore */ }
+          }
+        }
+
         for (let i = 0; i < chosen.length; i++) {
           const id = chosen[i]!;
           // 1) local photos (admin upload), 2) fallback — PMS photos.
@@ -370,9 +392,12 @@ export function buildTools(deps: {
             continue;
           }
           const c = await card(id);
+          const baseTitle = titles.get(id) ?? id;
+          // Disambiguate duplicate addresses in the caption with the price.
+          const dupPrice = (titleCount.get(baseTitle) ?? 0) > 1 ? priceById.get(id) : undefined;
           const caption = c
             ? `${c.title}${c.price ? ` — ${c.price} ₽/ночь` : ''}`
-            : titles.get(id);
+            : `${baseTitle}${dupPrice ? ` — ${dupPrice} ₽` : ''}`;
           await messenger.sendPhotos(chatId, urls.slice(0, MAX_PER_APT), caption);
           audit('send_apartment_photos', { chatId, propertyId: id, count: Math.min(urls.length, MAX_PER_APT) });
           results.push({ propertyId: id, sent: Math.min(urls.length, MAX_PER_APT) });
