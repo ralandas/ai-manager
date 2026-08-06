@@ -1,6 +1,7 @@
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { NewMessage, type NewMessageEvent } from 'telegram/events/index.js';
+import { CustomFile } from 'telegram/client/uploads.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import type { IncomingMessage, Messenger, MessageHandler } from './types.js';
@@ -193,20 +194,30 @@ export class TelegramUserMessenger implements Messenger {
   }
 
   async sendPhotos(chatId: string, urls: string[], caption?: string): Promise<void> {
-    // gramjs downloads the URL and uploads it as a photo. Caption on the first.
-    for (let i = 0; i < urls.length; i++) {
-      try {
-        await this.withTimeout(
-          this.client.sendFile(chatId, {
-            file: urls[i]!,
-            caption: i === 0 ? caption : undefined,
-          }),
-          60_000,
-          'sendFile',
-        );
-      } catch (err) {
-        logger.error({ chatId, url: urls[i], err }, 'telegram-user: sendFile failed');
-      }
+    if (urls.length === 0) return;
+    // Send as ONE album (media group). Telegram caps an album at 10 items.
+    // We download each image ourselves and upload the bytes: passing bnovo URLs
+    // straight to Telegram fails MEDIA_INVALID for a group (it can't fetch them
+    // in time), and sending photos one-by-one tripped FloodWaitError. One album
+    // = one grouped, captioned gallery per apartment, and one rate-limit unit.
+    const ALBUM_MAX = 10;
+    const batch = urls.slice(0, ALBUM_MAX);
+    try {
+      const files = await Promise.all(
+        batch.map(async (url, i) => {
+          const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+          if (!res.ok) throw new Error(`fetch ${url} -> ${res.status}`);
+          const buf = Buffer.from(await res.arrayBuffer());
+          return new CustomFile(`photo_${i}.jpg`, buf.length, '', buf);
+        }),
+      );
+      await this.withTimeout(
+        this.client.sendFile(chatId, { file: files, caption }),
+        120_000,
+        'sendAlbum',
+      );
+    } catch (err) {
+      logger.error({ chatId, count: batch.length, err }, 'telegram-user: sendPhotos album failed');
     }
   }
 

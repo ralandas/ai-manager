@@ -312,13 +312,17 @@ export function buildTools(deps: {
         ].filter(Boolean);
         if (ids.length === 0) return { error: 'Укажи propertyId или propertyIds' };
 
-        const MAX_APTS = 5; // don't flood the chat
-        const MAX_PER_APT = 6; // a handful of photos per apartment is enough
+        const MAX_APTS = 4; // don't flood the chat / trip Telegram's rate limit
+        const MAX_PER_APT = 10; // one album per apartment (Telegram album cap)
         const titles = new Map((await pms.listProperties()).map((p) => [p.id, p.title]));
 
         const results: Array<{ propertyId: string; sent: number }> = [];
         const empty: string[] = [];
-        for (const id of ids.slice(0, MAX_APTS)) {
+        const chosen = ids.slice(0, MAX_APTS);
+        for (let i = 0; i < chosen.length; i++) {
+          const id = chosen[i]!;
+          // Small gap between albums so several apartments don't trip FloodWait.
+          if (i > 0) await new Promise((r) => setTimeout(r, 1500));
           // 1) local photos (admin upload), 2) fallback — PMS photos.
           let urls = listPhotoUrls(id);
           if (urls.length === 0 && pms.getPhotos) {
