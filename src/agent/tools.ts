@@ -117,14 +117,40 @@ export function buildTools(deps: {
         const maxPrice = a.maxPrice ? Number(a.maxPrice) : undefined;
         const minPrice = a.minPrice ? Number(a.minPrice) : undefined;
 
+        // Token match for area/address: "гороховая 79" must match title
+        // "Гороховая улица 79" — a plain substring check fails on the "улица".
+        const areaTokens = area
+          ? area.replace(/[^a-zа-я0-9\s]/gi, ' ').split(/\s+/).filter((t) => t.length >= 2 && !['улица', 'проспект', 'переулок', 'дом', 'канала', 'набережная', 'остров', 'острова'].includes(t))
+          : [];
+        const matchesArea = (title: string) => {
+          if (areaTokens.length === 0) return true;
+          const tt = new Set(title.toLowerCase().replace(/[^a-zа-я0-9\s]/gi, ' ').split(/\s+/));
+          return areaTokens.every((t) => tt.has(t));
+        };
         const applyFilters = (rows: Array<{ title: string; available: boolean; totalPrice?: number }>) => {
           const availableRows = rows.filter((r) => r.available);
           const total = availableRows.length;
           let results = availableRows;
-          if (area) results = results.filter((r) => r.title.toLowerCase().includes(area));
+          if (area) results = results.filter((r) => matchesArea(r.title));
           if (maxPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice <= maxPrice);
           if (minPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice >= minPrice);
-          return { total, filtered: results.length, results };
+          // When the guest named a specific address, tell apart "занято" from
+          // "нет такой": list matching rooms that exist but are busy on the dates.
+          const busyAtArea = area
+            ? [...new Set(rows.filter((r) => !r.available && matchesArea(r.title)).map((r) => r.title))]
+            : [];
+          const existsAtArea = area
+            ? [...new Set(rows.filter((r) => matchesArea(r.title)).map((r) => r.title))]
+            : [];
+          // A ready-made instruction for the model so it can't misread "занято"
+          // as "нет такой" (deepseek sometimes does).
+          let note: string | undefined;
+          if (area) {
+            if (results.length > 0) note = `«${area}» свободна на эти даты — назови цену из results.`;
+            else if (busyAtArea.length > 0) note = `«${busyAtArea.join(', ')}» ЗАНЯТА на эти даты. Скажи гостю, что занята, и предложи другие даты/варианты. НЕ говори, что такой квартиры нет.`;
+            else if (existsAtArea.length === 0) note = `Квартиры по запросу «${area}» в базе нет — предложи похожие из общего списка.`;
+          }
+          return { total, filtered: results.length, results, busyAtArea, note };
         };
 
         if (!ownerId || (await isDirectPms())) {
