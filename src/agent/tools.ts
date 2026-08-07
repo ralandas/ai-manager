@@ -13,6 +13,7 @@ import {
   rememberBookingContact,
   setCheckoutTime,
   allBookingContacts,
+  getBookingContact,
 } from '../store/booking-contacts.js';
 import {
   assertAutonomyEnabled,
@@ -289,6 +290,9 @@ export function buildTools(deps: {
         assertAutonomyEnabled();
         const bookingId = (a.bookingId as string | undefined) ?? session.lastBookingId;
         if (!bookingId) return { error: 'В этом диалоге ещё нет созданной брони' };
+        if (getBookingContact(bookingId)?.cancelled) {
+          return { error: 'Эта бронь отменена (не оплачена вовремя) — старая ссылка недействительна. Нужно оформить бронь заново.' };
+        }
         const link = await pms.getPaymentLink(bookingId);
         audit('get_payment_link', { chatId, bookingId, url: link.url });
         return link;
@@ -308,6 +312,11 @@ export function buildTools(deps: {
       handler: async (a) => {
         const bookingId = (a.bookingId as string | undefined) ?? session.lastBookingId;
         if (!bookingId) return { error: 'В этом диалоге ещё нет созданной брони' };
+        // If we already auto-cancelled this booking (unpaid past the deadline),
+        // don't tell the guest to keep paying — the pay page is dead.
+        if (getBookingContact(bookingId)?.cancelled) {
+          return { bookingId, cancelled: true, note: 'Бронь была отменена (не оплачена вовремя). НЕ проси оплачивать по старой ссылке. Предложи оформить заново, если гость ещё хочет.' };
+        }
         if (!pms.isBookingPaid) return { error: 'Проверка оплаты недоступна для этого объекта' };
         const paid = await pms.isBookingPaid(bookingId);
         audit('check_payment', { chatId, bookingId, paid });

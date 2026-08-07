@@ -3,8 +3,25 @@ import { logger } from './logger.js';
 import type { Messenger } from './messenger/types.js';
 import type { PmsConnector } from './pms/types.js';
 import { allBookingContacts, markPaidNotified, patchBookingContact } from './store/booking-contacts.js';
+import { loadConversation, saveConversation } from './store/conversations.js';
 
 const MIN = 60 * 1000;
+
+/**
+ * Send a message to the guest AND append it to their conversation history, so
+ * the agent's next turn knows this was said (otherwise the model, seeing only
+ * the guest's history, keeps telling a guest to pay a booking we've cancelled).
+ */
+async function sayAndRecord(messenger: Messenger, chatId: string, text: string): Promise<void> {
+  await messenger.sendMessage(chatId, text);
+  try {
+    const conv = loadConversation(chatId);
+    conv.history.push({ role: 'assistant', text });
+    saveConversation(chatId, { history: conv.history.slice(-30), session: conv.session });
+  } catch {
+    /* history is best-effort */
+  }
+}
 
 /**
  * Background booking-payment lifecycle.
@@ -46,7 +63,7 @@ export function startPaymentWatcher(deps: {
         // 1) Paid? confirm and stop.
         if (await pms.isBookingPaid!(c.bookingId)) {
           const n = firstName(c.guestName);
-          await messenger.sendMessage(c.chatId, `${n ? n + ', о' : 'О'}плату вижу — спасибо 👍 Бронь подтверждена.`);
+          await sayAndRecord(messenger, c.chatId, `${n ? n + ', о' : 'О'}плату вижу — спасибо 👍 Бронь подтверждена.`);
           markPaidNotified(c.bookingId);
           logger.info({ bookingId: c.bookingId }, 'payment-watcher: paid, guest notified');
           continue;
@@ -57,7 +74,8 @@ export function startPaymentWatcher(deps: {
           // Mark cancelled FIRST so a slow cancel/send can't let the next tick
           // fire this branch again (which would double-message and double-cancel).
           patchBookingContact(c.bookingId, { cancelled: true });
-          await messenger.sendMessage(
+          await sayAndRecord(
+            messenger,
             c.chatId,
             'Оплата не поступила, поэтому снимаю бронь, чтобы не держать даты. ' +
               'Если ещё актуально — напишите, оформлю заново.',
@@ -73,7 +91,8 @@ export function startPaymentWatcher(deps: {
         if (age >= remindMs && !c.paymentReminded) {
           patchBookingContact(c.bookingId, { paymentReminded: true }); // set first (dedupe)
           const phone = config.MANAGER_PHONE ? ` Если есть вопросы — звоните менеджеру: ${config.MANAGER_PHONE}.` : '';
-          await messenger.sendMessage(
+          await sayAndRecord(
+            messenger,
             c.chatId,
             'Напоминаю про оплату брони — если не оплатить, бронь скоро снимется автоматически, чтобы не держать даты.' + phone,
           );
