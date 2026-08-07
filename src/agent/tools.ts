@@ -322,6 +322,8 @@ export function buildTools(deps: {
             type: 'string',
             description: 'Несколько ID через запятую',
           },
+          checkIn: { type: 'string', description: 'Дата заезда YYYY-MM-DD — чтобы указать цену в подписи' },
+          checkOut: { type: 'string', description: 'Дата выезда YYYY-MM-DD' },
         },
         required: [],
       },
@@ -357,9 +359,34 @@ export function buildTools(deps: {
           }
         }
         // Drop anything that isn't a real property id (model may hallucinate).
-        const valid = ids.filter((id) => titles.has(id));
-        if (valid.length === 0) {
+        const validRaw = ids.filter((id) => titles.has(id));
+        if (validRaw.length === 0) {
           return { error: 'Не нашёл эти квартиры. Передай query с адресом как в check_availability.' };
+        }
+
+        // Price for the caption — always show it (Al's request). Use the guest's
+        // dates if given, else the next night, so the number is meaningful.
+        const ci = (a.checkIn as string) || new Date().toISOString().slice(0, 10);
+        const co = (a.checkOut as string) || new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        const priceById = new Map<string, number | undefined>();
+        for (const id of validRaw) {
+          try {
+            const rc = await toRcId(id);
+            const av = rc ? await pms.checkAvailability({ propertyId: rc, checkIn: ci, checkOut: co, guests: 2 }) : [];
+            priceById.set(id, Array.isArray(av) ? av[0]?.totalPrice : undefined);
+          } catch { /* ignore */ }
+        }
+
+        // Dedup by (address + price): several identical rooms at one address
+        // (Рубинштейна 24 ×3 @8000) send once; genuinely different flats at the
+        // same address (Бронницкая 16 @10000 vs @13000) each stay.
+        const valid: string[] = [];
+        const seenKey = new Set<string>();
+        for (const id of validRaw) {
+          const key = `${titles.get(id)}|${priceById.get(id) ?? '?'}`;
+          if (seenKey.has(key)) continue;
+          seenKey.add(key);
+          valid.push(id);
         }
 
         // Keep the volume modest — fresh Telegram accounts have tight media
@@ -371,25 +398,6 @@ export function buildTools(deps: {
         const results: Array<{ propertyId: string; sent: number }> = [];
         const empty: string[] = [];
         const chosen = valid.slice(0, MAX_APTS);
-
-        // If any chosen apartments share an address, the caption must carry the
-        // price to tell them apart (e.g. two "Бронницкая 16" at 10000 / 13000).
-        const titleCount = new Map<string, number>();
-        for (const id of chosen) {
-          const t = titles.get(id) ?? id;
-          titleCount.set(t, (titleCount.get(t) ?? 0) + 1);
-        }
-        const priceById = new Map<string, number | undefined>();
-        if ([...titleCount.values()].some((n) => n > 1) && pms.getPhotos) {
-          // Cheap way to get per-room price: query availability for these ids.
-          for (const id of chosen) {
-            try {
-              const rc = await toRcId(id);
-              const av = rc ? await pms.checkAvailability({ propertyId: rc, checkIn: new Date().toISOString().slice(0, 10), checkOut: new Date(Date.now() + 86400000).toISOString().slice(0, 10), guests: 1 }) : [];
-              priceById.set(id, av[0]?.totalPrice);
-            } catch { /* ignore */ }
-          }
-        }
 
         for (let i = 0; i < chosen.length; i++) {
           const id = chosen[i]!;
@@ -411,11 +419,11 @@ export function buildTools(deps: {
           }
           const c = await card(id);
           const baseTitle = titles.get(id) ?? id;
-          // Disambiguate duplicate addresses in the caption with the price.
-          const dupPrice = (titleCount.get(baseTitle) ?? 0) > 1 ? priceById.get(id) : undefined;
+          // Always put the price in the caption (Al's request).
+          const price = priceById.get(id);
           const caption = c
             ? `${c.title}${c.price ? ` — ${c.price} ₽/ночь` : ''}`
-            : `${baseTitle}${dupPrice ? ` — ${dupPrice} ₽` : ''}`;
+            : `${baseTitle}${price ? ` — ${price} ₽` : ''}`;
           await messenger.sendPhotos(chatId, urls.slice(0, MAX_PER_APT), caption);
           audit('send_apartment_photos', { chatId, propertyId: id, count: Math.min(urls.length, MAX_PER_APT) });
           results.push({ propertyId: id, sent: Math.min(urls.length, MAX_PER_APT) });
@@ -429,7 +437,8 @@ export function buildTools(deps: {
         return {
           ok: true,
           sent: results.map((r) => titles.get(r.propertyId) ?? r.propertyId),
-          remaining, // not yet shown (cap) — ask the guest if they want more
+          remainingCount: remaining.length, // ask "показать ещё N?" if > 0
+          remaining, // addresses not yet shown (cap)
         };
       },
     },
