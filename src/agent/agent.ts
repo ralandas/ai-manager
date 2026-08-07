@@ -1,21 +1,22 @@
 import { logger } from '../logger.js';
-import type { LlmMessage, LlmProvider } from '../llm/types.js';
+import type { LlmProvider } from '../llm/types.js';
 import type { Messenger, IncomingMessage } from '../messenger/types.js';
 import type { PmsConnector } from '../pms/types.js';
-import { buildTools, type AgentSession } from './tools.js';
+import { buildTools } from './tools.js';
 import { systemPrompt } from './prompt.js';
+import { loadConversation, saveConversation } from '../store/conversations.js';
 
 const MAX_HISTORY = 30;
 
 /**
- * The conversational agent. Keeps per-chat history (in-memory for the pilot —
- * swap for Postgres later), runs an LLM turn with the PMS-backed tools, and
- * sends the reply back through the messenger.
+ * The conversational agent. Per-chat history + session are PERSISTED to disk
+ * (store/conversations.ts) so a process restart or crash keeps the dialog
+ * context — otherwise the bot "forgets" and re-greets mid-conversation. Runs an
+ * LLM turn with the PMS-backed tools and sends the reply through the messenger.
  */
 export class Agent {
-  private readonly histories = new Map<string, LlmMessage[]>();
-  private readonly sessions = new Map<string, AgentSession>();
-  /** Dedup by provider message id so webhook retries don't double-process. */
+  /** Dedup by provider message id so webhook retries don't double-process.
+   *  (In-memory only; on restart the persisted history still prevents a re-greet.) */
   private readonly seen = new Set<string>();
 
   constructor(
@@ -29,11 +30,10 @@ export class Agent {
     if (this.seen.has(dedupKey)) return;
     this.seen.add(dedupKey);
 
-    const history = this.histories.get(msg.chatId) ?? [];
+    // Load persisted context for this chat (survives restarts).
+    const { history, session } = loadConversation(msg.chatId);
     history.push({ role: 'user', text: msg.text });
 
-    const session = this.sessions.get(msg.chatId) ?? {};
-    this.sessions.set(msg.chatId, session);
     const tools = buildTools({
       pms: this.pms,
       messenger: this.messenger,
@@ -55,7 +55,8 @@ export class Agent {
     }
 
     history.push({ role: 'assistant', text: reply });
-    this.histories.set(msg.chatId, history.slice(-MAX_HISTORY));
+    // Persist trimmed history + session (session may hold lastBookingId).
+    saveConversation(msg.chatId, { history: history.slice(-MAX_HISTORY), session });
 
     await this.messenger.sendMessage(msg.chatId, reply);
   }

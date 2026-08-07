@@ -17,6 +17,9 @@ data/*.session
 # runtime state (guest contacts) — not content
 data/booking-contacts.json
 
+# runtime state (per-chat conversation history + session) — contains chat text
+data/conversations.json
+
 # logs
 *.log
 logs/
