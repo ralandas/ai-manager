@@ -26,6 +26,9 @@ export interface BookingContact {
   createdAt?: number;
   /** Set once we've told the guest their payment arrived (dedupe the notice). */
   paidNotified?: boolean;
+  /** Unpaid-dressing state: sent the "не оплатили?" reminder / cancelled it. */
+  paymentReminded?: boolean;
+  cancelled?: boolean;
 }
 
 function load(): Record<string, BookingContact> {
@@ -66,6 +69,14 @@ export function markPaidNotified(bookingId: string): void {
   const existing = all[bookingId];
   if (!existing) return;
   existing.paidNotified = true;
+  save(all);
+}
+
+export function patchBookingContact(bookingId: string, patch: Partial<BookingContact>): void {
+  const all = load();
+  const existing = all[bookingId];
+  if (!existing) return;
+  all[bookingId] = { ...existing, ...patch };
   save(all);
 }
 

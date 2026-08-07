@@ -79,4 +79,6 @@ export interface PmsConnector {
   getPhotos?(propertyId: string): Promise<string[]>;
   /** Whether the booking has any payment recorded (optional; PMS-specific). */
   isBookingPaid?(bookingId: string): Promise<boolean>;
+  /** Cancel a booking (optional; PMS-specific). Returns true on success. */
+  cancelBooking?(bookingId: string): Promise<boolean>;
 }

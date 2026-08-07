@@ -48,6 +48,12 @@ const schema = z.object({
     .transform((v) => v === 'true' || v === '1'),
   TG_POLL_INTERVAL_MS: z.coerce.number().optional(), // default 4000
 
+  // Manager phone the bot can hand out (e.g. with the payment link). Empty = omit.
+  MANAGER_PHONE: z.string().optional(),
+  // Unpaid-booking dressing: remind after N ms, then ask-and-cancel after M ms.
+  PAYMENT_REMIND_MS: z.coerce.number().optional(), // default 15 min
+  PAYMENT_CANCEL_MS: z.coerce.number().optional(), // default 30 min
+
   WAPI_BASE_URL: z.string().optional(),
   WAPI_TOKEN: z.string().optional(),
 
