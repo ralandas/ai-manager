@@ -289,6 +289,42 @@ export function buildTools(deps: {
       },
     },
     {
+      name: 'apartment_amenities',
+      description:
+        'Получить полное описание квартиры (что есть в квартире: кухня, техника, санузел, удобства, правила). Вызывай, когда гость спрашивает про конкретное: «есть ли холодильник/кондиционер/стиральная машина/Wi-Fi/посуда» и т.п. Передай адрес квартиры в query (как показывал гостю). Отвечай гостю ТОЛЬКО по этому описанию: если в описании упомянуто — «да, есть»; если НЕ упомянуто — не выдумывай, скажи, что уточнишь у администратора.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Адрес квартиры (как показывал гостю)' },
+          propertyId: { type: 'string', description: 'ID квартиры, если знаешь точно' },
+        },
+        required: [],
+      },
+      handler: async (a) => {
+        if (!pms.getDescription) return { error: 'Описание недоступно для этого объекта' };
+        // Resolve the property id: explicit id, or token-match the address.
+        let id = a.propertyId ? String(a.propertyId) : undefined;
+        if (!id && a.query) {
+          const props = await pms.listProperties();
+          const norm = (s: string) =>
+            s.toLowerCase().replace(/[^a-zа-я0-9\s]/gi, ' ').split(/\s+/)
+              .filter((t) => t.length >= 2 && !['улица', 'проспект', 'переулок', 'дом', 'канала', 'набережная', 'остров', 'острова'].includes(t));
+          const qt = norm(String(a.query));
+          const hit = props.find((p) => {
+            const tt = new Set(norm(p.title));
+            return qt.length > 0 && qt.every((t) => tt.has(t));
+          });
+          id = hit?.id;
+        }
+        if (!id) return { error: 'Не нашёл квартиру. Передай query с адресом как в check_availability.' };
+        const rcId = await toRcId(id);
+        const description = rcId ? await pms.getDescription(rcId) : null;
+        if (!description) return { error: 'Описание этой квартиры пока недоступно — уточни у администратора.' };
+        audit('apartment_amenities', { chatId, propertyId: id });
+        return { description };
+      },
+    },
+    {
       name: 'get_apartment_info',
       description:
         'Ссылка на страницу квартиры с правилами проживания и инструкцией по заселению. Дай её клиенту вместо пересказа правил текстом.',

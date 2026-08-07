@@ -81,4 +81,6 @@ export interface PmsConnector {
   isBookingPaid?(bookingId: string): Promise<boolean>;
   /** Cancel a booking (optional; PMS-specific). Returns true on success. */
   cancelBooking?(bookingId: string): Promise<boolean>;
+  /** Full free-text listing description (amenities/rules), if the PMS has one. */
+  getDescription?(propertyId: string): Promise<string | null>;
 }

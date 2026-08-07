@@ -248,8 +248,8 @@ export class BnovoClient implements PmsConnector {
   private roomsCache: Map<string, { roomTypeId: number; number: string; name?: string }> | null =
     null;
   private namesCache: Map<string, string> | null = null;
-  /** room_type_id -> presentation (address + photos), cached per process. */
-  private presCache = new Map<string, { address?: string; photos: string[] }>();
+  /** room_type_id -> presentation (address + description + photos), cached per process. */
+  private presCache = new Map<string, { address?: string; description?: string; photos: string[] }>();
   /** true once listProperties has enriched titles with real addresses. */
   private addressesEnriched = false;
 
@@ -261,11 +261,13 @@ export class BnovoClient implements PmsConnector {
    *     -> { data: { pms_room_type: { name, description, adults }, photos: [{ url }] } }
    * Cached per room type; best-effort (returns empty on failure).
    */
-  private async presentation(roomTypeId: string): Promise<{ address?: string; photos: string[] }> {
+  private async presentation(
+    roomTypeId: string,
+  ): Promise<{ address?: string; description?: string; photos: string[] }> {
     const key = String(roomTypeId);
     const cached = this.presCache.get(key);
     if (cached) return cached;
-    let out: { address?: string; photos: string[] } = { photos: [] };
+    let out: { address?: string; description?: string; photos: string[] } = { photos: [] };
     try {
       const resp = await this.request<BnovoPresentationResponse>(
         'post',
@@ -276,13 +278,26 @@ export class BnovoClient implements PmsConnector {
         const photos = (resp.data.photos ?? [])
           .map((p) => p.url)
           .filter((u): u is string => typeof u === 'string' && u.length > 0);
-        out = { address: this.parseAddress(resp.data.pms_room_type?.description), photos };
+        const description = resp.data.pms_room_type?.description;
+        out = { address: this.parseAddress(description), description, photos };
       }
     } catch (err) {
       logger.warn({ roomTypeId, err }, 'Bnovo presentation fetch failed');
     }
     this.presCache.set(key, out);
     return out;
+  }
+
+  /**
+   * Full free-text description of a room (by room_id) — the owner's listing text
+   * with amenities (kitchen/bathroom/tech/rules). The agent reads this to answer
+   * "есть ли холодильник / кондиционер / ...". Returns null if unavailable.
+   */
+  async getDescription(propertyId: string): Promise<string | null> {
+    const rooms = await this.rooms();
+    const entry = rooms.get(String(propertyId));
+    if (!entry) return null;
+    return (await this.presentation(String(entry.roomTypeId))).description ?? null;
   }
 
   /** Pull a clean street address from the owner's free-text description. */
