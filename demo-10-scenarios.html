@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI-менеджер — 10 тестовых сценариев</title>
+<style>
+  :root{--bg:#eef1f4;--panel:#fff;--ink:#16202b;--muted:#66727f;--hair:#dde3ea;
+    --guest:#d8f2d0;--guest-ink:#1c2b16;--bot:#fff;--accent:#2f7d5b;--tag:#eaf3ef;--tag-ink:#2f7d5b;--chatbg:#dbe6ee;
+    --shadow:0 1px 2px rgba(20,32,43,.08),0 6px 20px rgba(20,32,43,.06);}
+  @media (prefers-color-scheme:dark){:root{--bg:#10161c;--panel:#171f27;--ink:#e7edf3;--muted:#90a0af;--hair:#26313c;
+    --guest:#245b3f;--guest-ink:#eaf7ee;--bot:#1e2831;--accent:#56b487;--tag:#1c2c25;--tag-ink:#7fd4ab;--chatbg:#131b22;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 26px rgba(0,0,0,.35);}}
+  :root[data-theme="dark"]{--bg:#10161c;--panel:#171f27;--ink:#e7edf3;--muted:#90a0af;--hair:#26313c;--guest:#245b3f;--guest-ink:#eaf7ee;--bot:#1e2831;--accent:#56b487;--tag:#1c2c25;--tag-ink:#7fd4ab;--chatbg:#131b22;}
+  :root[data-theme="light"]{--bg:#eef1f4;--panel:#fff;--ink:#16202b;--muted:#66727f;--hair:#dde3ea;--guest:#d8f2d0;--guest-ink:#1c2b16;--bot:#fff;--accent:#2f7d5b;--tag:#eaf3ef;--tag-ink:#2f7d5b;--chatbg:#dbe6ee;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,"Segoe UI",Roboto,system-ui,sans-serif;line-height:1.5}
+  .wrap{max-width:820px;margin:0 auto;padding:40px 18px 64px}
+  header.top{margin-bottom:26px}
+  .kicker{display:inline-block;font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--tag-ink);background:var(--tag);padding:5px 11px;border-radius:999px;font-weight:600}
+  h1{font-size:clamp(26px,4vw,34px);margin:14px 0 6px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:15px;max-width:64ch}
+  .scen{background:var(--panel);border:1px solid var(--hair);border-radius:16px;box-shadow:var(--shadow);padding:16px 16px 8px;margin-bottom:20px}
+  .scen-head{display:flex;gap:13px;align-items:flex-start;margin-bottom:12px}
+  .num{flex:none;width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;font-weight:700;display:grid;place-items:center;font-size:16px}
+  .scen-head h2{font-size:17px;margin:2px 0 3px}
+  .note{color:var(--muted);font-size:13px;margin:0}
+  .chat{background:var(--chatbg);border-radius:13px;padding:12px;display:flex;flex-direction:column;gap:7px}
+  .row{display:flex}.row.g{justify-content:flex-end}.row.b{justify-content:flex-start}
+  .msg{max-width:80%;padding:8px 12px;border-radius:14px;font-size:14.5px;white-space:normal;box-shadow:0 1px 1px rgba(20,32,43,.06)}
+  .g .msg{background:var(--guest);color:var(--guest-ink);border-bottom-right-radius:5px}
+  .b .msg{background:var(--bot);color:var(--ink);border-bottom-left-radius:5px}
+  .album{align-self:flex-start;font-size:12.5px;color:var(--muted);background:var(--tag);border-radius:9px;padding:4px 10px;max-width:80%}
+  footer{margin-top:22px;color:var(--muted);font-size:12.5px}
+</style>
+<div class="wrap">
+  <header class="top">
+    <span class="kicker">QA · 10 сценариев</span>
+    <h1>AI-менеджер — прогон 10 сценариев</h1>
+    <p class="sub">Реальные ответы бота @artem_pro_admin (модель DeepSeek V4 Flash · PMS Bnovo), снятые автопрогоном через движок агента с боевыми инструментами и данными. Проверены: подбор, предфильтр, фото, удобства, цены, ранний заезд, овербукинг, оплата, крайние случаи.</p>
+  </header>
+  
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">1</span>
+        <div><h2>Базовый подбор + фото + бронь</h2><p class="note">Приветствие → предфильтр по бюджету → список с ценами → фото → бронь.</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Здравствуйте</div></div>
+      
+      <div class="row b"><div class="msg">Здравствуйте! По поводу квартиры?</div></div>
+      <div class="row g"><div class="msg">На 20-22 октября, на двоих</div></div>
+      
+      <div class="row b"><div class="msg">На эти даты свободно 36 квартир. Подскажите район или станцию метро и примерно бюджет — подберу точнее.</div></div>
+      <div class="row g"><div class="msg">центр, до 12000</div></div>
+      
+      <div class="row b"><div class="msg">По запросу «центр» точного списка нет. Уточните, пожалуйста, конкретную улицу или станцию метро — подберу по ней.</div></div>
+      <div class="row g"><div class="msg">скиньте фото всех вариантов</div></div>
+      
+      <div class="row b"><div class="msg">Вот свободные варианты на 20–22 октября:<br><br>- Садовая 7-9-11 — 10 000 ₽<br>- Гороховая 79 — 9 000 ₽<br>- Рубинштейна 24 — 8 000 ₽<br>- Бронницкая 16 — 10 000 ₽<br>- Садовая 7-9-11 — 12 000 ₽<br><br>Скинуть фото всех вариантов?</div></div>
+      <div class="row g"><div class="msg">давайте Гороховую 79</div></div>
+      
+      <div class="row b"><div class="msg">Гороховая 79 на 20–22 октября свободна — 9 000 ₽ за 2 ночи. Бронируем?</div></div>
+      <div class="row g"><div class="msg">Пётр, +79991110022</div></div>
+      
+      <div class="row b"><div class="msg">Бронь подтверждена: Гороховая 79, 20–22 октября, 9 000 ₽. Пришлите, пожалуйста, телефон для ссылки на оплату.</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">2</span>
+        <div><h2>Сразу все данные одним сообщением</h2><p class="note">Все данные одним сообщением — бот сразу подбирает и бронирует.</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Здравствуйте! Нужна квартира на 25-27 октября, двое, центр до 10000</div></div>
+      
+      <div class="row b"><div class="msg">На эти даты в центре свободно 4 квартиры:<br><br>• Бронницкая 16 — 10 000 ₽ за 2 ночи<br>• Садовая 7-9-11 — 10 000 ₽<br>• Рубинштейна 24 (окна во двор) — 8 000 ₽<br>• Гороховая 79 — 9 000 ₽<br><br>Скинуть фото всех вариантов?</div></div>
+      <div class="row g"><div class="msg">фото первой</div></div>
+      <div class="album">🖼 [альбом 5 фото] Бронницкая улица 16 — 10000 ₽</div><div class="album">🖼 [альбом 5 фото] Бронницкая улица 16 — 13000 ₽</div>
+      <div class="row b"><div class="msg">Отправила фото Бронницкой 16. Забронировать на 25–27 октября?</div></div>
+      <div class="row g"><div class="msg">бронируем, Анна +79992223344</div></div>
+      
+      <div class="row b"><div class="msg">Бронь подтверждена на Бронницкую 16, на 25–27 октября, 10 000 ₽.<br><br>Ссылка на оплату: https://payment.bnovo.ru/v2/?transaction=pms_241460f34ec06d832b574d775e351b652af4<br><br>Оплатите в течение 30 минут, иначе бронь снимется автоматически.</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">3</span>
+        <div><h2>Вопросы про удобства (есть/нет)</h2><p class="note">Вопросы про удобства: отвечает по описанию квартиры (есть/нет), + видит что занята.</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Гороховая 79 свободна на 20-21 октября?</div></div>
+      
+      <div class="row b"><div class="msg">Квартира на Гороховой 79 занята на эти даты. Могу подобрать другую поблизости — подскажите примерный бюджет или район, подберу свободные варианты.</div></div>
+      <div class="row g"><div class="msg">холодильник и стиральная машина есть?</div></div>
+      
+      <div class="row b"><div class="msg">Да, в квартире есть и холодильник, и стиральная машина 👍<br><br>Только сама квартира на эти даты занята. Могу подобрать другую рядом — скажете бюджет?</div></div>
+      <div class="row g"><div class="msg">а кондиционер?</div></div>
+      
+      <div class="row b"><div class="msg">Кондиционера в этой квартире нет. Холодильник и стиральная машина есть, а кондиционер — нет.<br><br>Но на эти даты квартира всё равно занята. Хотите, подберу другую свободную рядом?</div></div>
+      <div class="row g"><div class="msg">посудомойка есть?</div></div>
+      
+      <div class="row b"><div class="msg">Посудомоечной машины в квартире нет.<br><br>Но она всё равно занята на эти даты. Могу подобрать другую свободную рядом — скажете бюджет?</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">4</span>
+        <div><h2>Отказ «половину сейчас»</h2><p class="note">Отказ «половину сейчас» — по политике оплата целиком.</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Есть что-то на 15-16 ноября на двоих?</div></div>
+      
+      <div class="row b"><div class="msg">На эти даты свободно много квартир. Подскажите, какой район (или улица) вам удобнее и примерно какой бюджет на ночь — подберу точнее.</div></div>
+      <div class="row g"><div class="msg">а можно оплатить половину сейчас, половину при заселении?</div></div>
+      
+      <div class="row b"><div class="msg">Нет, оплата сразу за все сутки при заселении, разделить нельзя.<br><br>Давайте сначала подберём квартиру на ваши даты. Какой район или улица удобны?</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">5</span>
+        <div><h2>Ранний заезд (доплата)</h2><p class="note">Ранний заезд — считает доплату (350 ₽/час) и предлагает альтернативу.</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Гороховая 79 на 10-11 ноября</div></div>
+      
+      <div class="row b"><div class="msg">Гороховая 79, 10–11 ноября — **4 500 ₽** за ночь. Свободна. Будем бронировать?</div></div>
+      <div class="row g"><div class="msg">мы приедем в 8 утра, можно сразу заселиться?</div></div>
+      
+      <div class="row b"><div class="msg">Заезд по умолчанию в 14:00. В 8 утра заселиться можно двумя способами:<br><br>**Вариант 1** — забронировать предыдущие сутки (с 9 на 10 ноября + 10 на 11 ноября), тогда заезд в любое время. Итого 9 000 ₽ за 2 ночи.<br><br>**Вариант 2** — ранний заезд с доплатой 350 ₽/час: 8 утра → 14:00 = 6 часов = **2 100 ₽** доплата. Стоимость брони + ранний заезд = 4 500 + 2 100 = **6 600 ₽**.<br><br>Как удобнее?</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">6</span>
+        <div><h2>Предфильтр: много вариантов</h2><p class="note">Много вариантов — не вываливает список, спрашивает район и бюджет.</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Здравствуйте, что есть на 5-6 декабря на двоих?</div></div>
+      
+      <div class="row b"><div class="msg">Свободно много. Подскажите, какой район или станция метро вас интересуют и примерный бюджет на сутки?</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">7</span>
+        <div><h2>Овербукинг — занятые даты</h2><p class="note">Овербукинг — занятые даты: отказывает, не создаёт дубль.</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">хочу Гороховую 79 на 20-22 октября</div></div>
+      
+      <div class="row b"><div class="msg">Квартира на Гороховой 79, к сожалению, занята на эти даты.<br><br>Могу подобрать другой вариант. Подскажите, какой район или станция метро вас интересует и примерный бюджет?</div></div>
+      <div class="row g"><div class="msg">да, Иван +79993334455</div></div>
+      
+      <div class="row b"><div class="msg">Гороховая 79 занята на 20–22 октября.<br><br>Подскажите, какой район или станция метро удобны? И примерный бюджет на две ночи?</div></div>
+      <div class="row g"><div class="msg">а ещё одну такую же Гороховую 79 на те же даты</div></div>
+      
+      <div class="row b"><div class="msg">Все квартиры по адресу Гороховая 79 заняты на 20–22 октября.<br><br>Хотите посмотреть другие варианты в центре? Скажите район или бюджет, подберу.</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">8</span>
+        <div><h2>Оплата: «оплатил» → check_payment</h2><p class="note">Оплата: «я оплатил» → реальная проверка по счёту (не на слово).</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Бронь Гороховая 79 на 28-29 ноября, Олег +79994445566</div></div>
+      
+      <div class="row b"><div class="msg">Оплатите по ссылке: https://payment.bnovo.ru/v2/?transaction=pms_24152e3d9235cabfbe3e3f3aa9a42dbe8feb<br><br>Сумма 4 500 ₽ за ночь с 28 на 29 ноября. Оплатите в течение 30 минут, иначе бронь снимется автоматически.</div></div>
+      <div class="row g"><div class="msg">я оплатил</div></div>
+      
+      <div class="row b"><div class="msg">Платёж пока не поступил. Проверьте, прошла ли оплата? Можно минуту подождать и попробовать ещё раз.</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">9</span>
+        <div><h2>Обрывок имени + короткие ответы</h2><p class="note">Короткие ответы и имя-обрывок («Газ») — бронь всё равно оформляется.</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Гороховая 79 на 12-13 декабря сколько?</div></div>
+      
+      <div class="row b"><div class="msg">Гороховая 79 на эти даты свободна — 4 500 ₽ за ночь. Бронируем?</div></div>
+      <div class="row g"><div class="msg">ок бронь</div></div>
+      
+      <div class="row b"><div class="msg">Напишите имя и телефон для брони.</div></div>
+      <div class="row g"><div class="msg">Газ</div></div>
+      
+      <div class="row b"><div class="msg">Гороховая 79, к сожалению, на эти даты уже занята. Могу подобрать другую квартиру — подскажите район и бюджет?</div></div>
+      <div class="row g"><div class="msg">+79995556677</div></div>
+      
+      <div class="row b"><div class="msg">Гороховая 79 свободна — 4 500 ₽ за ночь. Оформляю бронь на имя Газ?</div></div></div>
+    </section>
+    <section class="scen">
+      <div class="scen-head">
+        <span class="num">10</span>
+        <div><h2>«Сдаёте?» без деталей + отмена</h2><p class="note">«Сдаёте?» без деталей + отмена — вежливое «Ок».</p></div>
+      </div>
+      <div class="chat">
+      <div class="row g"><div class="msg">Здравствуйте! Вы сдаёте квартиры?</div></div>
+      
+      <div class="row b"><div class="msg">Здравствуйте! По поводу квартиры?</div></div>
+      <div class="row g"><div class="msg">на 18-20 октября, двое</div></div>
+      
+      <div class="row b"><div class="msg">На эти даты свободно 36 квартир. Подскажите, какой район или станция метро предпочтительнее? И примерный бюджет на две ночи?</div></div>
+      <div class="row g"><div class="msg">а, передумал, отмена</div></div>
+      
+      <div class="row b"><div class="msg">Ок</div></div></div>
+    </section>
+  <footer>Диалоги — дословный вывод бота при автотесте. 🖼 = отправленный альбом фото (в реальном чате идут сами фото квартиры из Bnovo).</footer>
+</div>
+</html>
