@@ -32,7 +32,13 @@ export class Agent {
 
     // Load persisted context for this chat (survives restarts).
     const { history, session } = loadConversation(msg.chatId);
-    history.push({ role: 'user', text: msg.text });
+    // If the guest replied to one of our messages (e.g. a photo album captioned
+    // with an apartment address), fold that caption into the turn so the model
+    // knows what "эту"/"давайте её" points at instead of re-asking.
+    const userText = msg.quotedText
+      ? `[в ответ на наше сообщение: "${msg.quotedText}"]\n${msg.text}`
+      : msg.text;
+    history.push({ role: 'user', text: userText });
 
     const tools = buildTools({
       pms: this.pms,

@@ -65,14 +65,41 @@ interface BnovoClosure {
   reason: string;
 }
 
-/** POST /roomTypes/getRoomTypeVariation — per-room-type price for a date range. */
+/**
+ * POST /roomTypes/getRoomTypeVariation — per-room-type price for a date range,
+ * plus the two things the booking flow needs but wasn't reading before:
+ *   - `adults` / `places` — how many guests the room sleeps (capacity)
+ *   - `date_restrictions[date]` — per-day minstay/maxstay + arrival/departure
+ *     closures (minstay_a is the arrival-specific minimum; falls back to minstay)
+ */
+interface BnovoDateRestriction {
+  date?: string;
+  minstay?: number;
+  minstay_a?: number;
+  maxstay?: number;
+  closed?: boolean;
+  closed_arrival?: boolean;
+  closed_departure?: boolean;
+}
+/** Stay restrictions for one room over a requested window, distilled from Bnovo. */
+interface RoomRestriction {
+  minStay: number;
+  maxStay: number;
+  closedArrival: boolean;
+}
 interface BnovoVariationResponse {
   result: string;
   data?: {
     variation?: Array<{
       roomtype_id?: number;
       roomtype_name?: string;
-      placings?: Array<{ price?: number; rooms_count?: number }>;
+      placings?: Array<{
+        price?: number;
+        rooms_count?: number;
+        adults?: number;
+        places?: { main?: number; extra?: number; no_place?: number };
+        date_restrictions?: Record<string, BnovoDateRestriction>;
+      }>;
     }>;
   };
 }
@@ -383,10 +410,27 @@ export class BnovoClient implements PmsConnector {
     await this.enrichAddresses(rooms);
     return [...rooms].map(([room_id, r]) => ({
       id: room_id,
-      title: this.presCache.get(String(r.roomTypeId))?.address || r.name || r.number,
+      title: this.prettyTitle(this.presCache.get(String(r.roomTypeId))?.address || r.name || r.number),
       basePrice: 0, // per-date price comes from checkAvailability
       maxGuests: 0,
     }));
+  }
+
+  /**
+   * Tidy the owner's hand-typed address so several studios at one building read
+   * consistently. The owner writes them three different ways — "28 (1)", "28\2",
+   * "28 (3)" — which confuses guests picking one. Unify the studio suffix to
+   * "(N)" and normalize the "N-я Красноармейская" street form. Token matching in
+   * send_apartment_photos strips punctuation anyway, so this is display-only.
+   */
+  private prettyTitle(raw: string): string {
+    let s = raw.trim();
+    // "28\2" / "28/2" studio suffix -> "28 (2)" (only a bare 1-2 digit tail,
+    // never a real street number like "20/8" which stays as written).
+    s = s.replace(/(\d+)\s*[\\](\d{1,2})\b/g, '$1 ($2)');
+    // "5 красноармейская" / "5-я красноармейская" -> "5-я Красноармейская"
+    s = s.replace(/\b(\d+)(?:-?я)?\s+красноармейская/gi, '$1-я Красноармейская');
+    return s;
   }
 
   /**
@@ -428,9 +472,20 @@ export class BnovoClient implements PmsConnector {
     checkIn: string,
     checkOut: string,
     guests: number,
-  ): Promise<{ byTypeId: Map<number, number>; byLabel: Map<string, number> }> {
+  ): Promise<{
+    byTypeId: Map<number, number>;
+    byLabel: Map<string, number>;
+    capByTypeId: Map<number, number>;
+    capByLabel: Map<string, number>;
+    resByTypeId: Map<number, RoomRestriction>;
+    resByLabel: Map<string, RoomRestriction>;
+  }> {
     const byTypeId = new Map<number, number>();
     const byLabel = new Map<string, number>();
+    const capByTypeId = new Map<number, number>();
+    const capByLabel = new Map<string, number>();
+    const resByTypeId = new Map<number, RoomRestriction>();
+    const resByLabel = new Map<string, RoomRestriction>();
     const res = await this.request<BnovoVariationResponse>('post', '/roomTypes/getRoomTypeVariation', {
       body: JSON.stringify({
         adultCustomerCount: Math.max(1, guests),
@@ -444,12 +499,70 @@ export class BnovoClient implements PmsConnector {
       headers: { 'content-type': 'application/json' },
     });
     for (const v of res?.data?.variation ?? []) {
-      const price = v.placings?.[0]?.price;
-      if (typeof price !== 'number' || price <= 0) continue;
-      if (v.roomtype_id != null) byTypeId.set(v.roomtype_id, price);
-      if (v.roomtype_name) byLabel.set(this.normLabel(v.roomtype_name), price);
+      const p = v.placings?.[0];
+      const label = v.roomtype_name ? this.normLabel(v.roomtype_name) : undefined;
+
+      // Price (unchanged): only index positive prices.
+      const price = p?.price;
+      if (typeof price === 'number' && price > 0) {
+        if (v.roomtype_id != null) byTypeId.set(v.roomtype_id, price);
+        if (label) byLabel.set(label, price);
+      }
+
+      // Capacity: how many adults the room sleeps (main + extra beds, else adults).
+      const cap = this.capacityOf(p);
+      if (cap != null) {
+        if (v.roomtype_id != null) capByTypeId.set(v.roomtype_id, cap);
+        if (label) capByLabel.set(label, cap);
+      }
+
+      // Restrictions for THIS arrival date (minstay_a) + window min/max.
+      const restriction = this.restrictionOf(p, checkIn);
+      if (restriction) {
+        if (v.roomtype_id != null) resByTypeId.set(v.roomtype_id, restriction);
+        if (label) resByLabel.set(label, restriction);
+      }
     }
-    return { byTypeId, byLabel };
+    return { byTypeId, byLabel, capByTypeId, capByLabel, resByTypeId, resByLabel };
+  }
+
+  /**
+   * True max guests a room sleeps. In getRoomTypeVariation, `adults` is the
+   * room's real capacity, while `places.main` just ECHOES the queried guest
+   * count (verified: 5кр1 shows adults:2 but main:3 when you ask for 3, and
+   * Bnovo also drops it from results entirely when guests exceed adults). So we
+   * key capacity off `adults`, not the beds echo. `places.extra` adds sofa beds.
+   */
+  private capacityOf(p?: {
+    adults?: number;
+    places?: { main?: number; extra?: number };
+  }): number | undefined {
+    if (!p) return undefined;
+    if (typeof p.adults === 'number' && p.adults > 0) return p.adults + (p.places?.extra ?? 0);
+    return undefined;
+  }
+
+  /**
+   * Collapse a placing's per-day date_restrictions into one object for the stay:
+   *   - minStay: the arrival-date minimum (minstay_a, else minstay)
+   *   - maxStay: the smallest positive maxstay across the window (0 = no limit)
+   *   - closedArrival: arrival closed on the check-in date
+   */
+  private restrictionOf(
+    p: { date_restrictions?: Record<string, BnovoDateRestriction> } | undefined,
+    checkIn: string,
+  ): RoomRestriction | undefined {
+    const dr = p?.date_restrictions;
+    if (!dr) return undefined;
+    const arr = dr[checkIn];
+    const minStay = Math.max(0, arr?.minstay_a || arr?.minstay || 0);
+    let maxStay = 0;
+    for (const r of Object.values(dr)) {
+      if (r?.maxstay && r.maxstay > 0) maxStay = maxStay === 0 ? r.maxstay : Math.min(maxStay, r.maxstay);
+    }
+    const closedArrival = !!arr?.closed_arrival;
+    if (minStay === 0 && maxStay === 0 && !closedArrival) return undefined;
+    return { minStay, maxStay, closedArrival };
   }
 
   /** Normalize a room label for matching — labels differ in spacing/case across
@@ -486,24 +599,36 @@ export class BnovoClient implements PmsConnector {
     ]);
 
     const ids = q.propertyId ? [q.propertyId] : [...rooms.keys()];
-    const priceFor = (id: string, title: string): number | undefined => {
+    // Generic lookup against the dual (byTypeId / byLabel) indexes. Price,
+    // capacity and restrictions all key the same way, so share one resolver:
+    // room-type id first (matches when dual_roomtype_id lines up), then label,
+    // number code, and finally the address title. Coerce the type id to a
+    // number — Bnovo returns dual_roomtype_id as string for some rooms.
+    const lookup = <T>(id: string, title: string, byTypeId: Map<number, T>, byLabel: Map<string, T>): T | undefined => {
       const entry = dict.get(id);
-      // Try the room-type id first (matches when dual_roomtype_id lines up),
-      // then the label, its number code, and finally the address title.
-      // Coerce the type id to a number — Bnovo returns dual_roomtype_id as a
-      // string for some rooms and a number for others, and the index is numeric.
-      return (
-        (entry?.roomTypeId != null && prices.byTypeId.get(Number(entry.roomTypeId))) ||
-        (entry?.name && prices.byLabel.get(this.normLabel(entry.name))) ||
-        (entry?.number && prices.byLabel.get(this.normLabel(entry.number))) ||
-        prices.byLabel.get(this.normLabel(title)) ||
-        undefined
-      );
+      const fromType = entry?.roomTypeId != null ? byTypeId.get(Number(entry.roomTypeId)) : undefined;
+      if (fromType !== undefined) return fromType;
+      const fromName = entry?.name ? byLabel.get(this.normLabel(entry.name)) : undefined;
+      if (fromName !== undefined) return fromName;
+      const fromNumber = entry?.number ? byLabel.get(this.normLabel(entry.number)) : undefined;
+      if (fromNumber !== undefined) return fromNumber;
+      return byLabel.get(this.normLabel(title));
     };
 
     const rows = ids.map((id) => {
       const title = rooms.get(id) ?? id;
-      return { propertyId: id, title, available: !busy.has(id), nights, totalPrice: priceFor(id, title) };
+      const restriction = lookup(id, title, prices.resByTypeId, prices.resByLabel);
+      return {
+        propertyId: id,
+        title,
+        available: !busy.has(id),
+        nights,
+        totalPrice: lookup(id, title, prices.byTypeId, prices.byLabel),
+        capacity: lookup(id, title, prices.capByTypeId, prices.capByLabel),
+        minStay: restriction?.minStay,
+        maxStay: restriction?.maxStay,
+        closedArrival: restriction?.closedArrival,
+      };
     });
 
     // A specific room was asked for — return it as-is (no dedup).
@@ -585,6 +710,41 @@ export class BnovoClient implements PmsConnector {
       throw new Error(
         `Bnovo createBooking refused: room ${roomId} is already booked for ${input.checkIn}..${input.checkOut}`,
       );
+    }
+
+    // Capacity + stay-length guards. Bnovo's /booking/add is forced, so it won't
+    // enforce these itself — we read the room's own availability (which now
+    // carries capacity + minStay/maxStay for the requested window) and refuse a
+    // booking that overloads the room or violates the owner's date limits. Last
+    // line of defence if the model skipped the check.
+    const nightsReq = this.nights(input.checkIn, input.checkOut);
+    // Query at guests=1 for the capacity/restriction read: Bnovo omits a room
+    // from getRoomTypeVariation when the requested party exceeds its capacity,
+    // which would leave `capacity` undefined and silently skip the guard. At
+    // guests=1 every room is returned with its true `adults` capacity.
+    const [self] = await this.checkAvailability({
+      propertyId: String(roomId),
+      checkIn: input.checkIn,
+      checkOut: input.checkOut,
+      guests: 1,
+    });
+    if (self?.capacity && input.guests > self.capacity) {
+      throw new Error(
+        `Bnovo createBooking refused: room ${roomId} sleeps ${self.capacity}, but ${input.guests} guests requested`,
+      );
+    }
+    if (self?.minStay && nightsReq < self.minStay) {
+      throw new Error(
+        `Bnovo createBooking refused: minimum stay for ${input.checkIn} is ${self.minStay} nights, ${nightsReq} requested`,
+      );
+    }
+    if (self?.maxStay && nightsReq > self.maxStay) {
+      throw new Error(
+        `Bnovo createBooking refused: maximum stay for ${input.checkIn} is ${self.maxStay} nights, ${nightsReq} requested`,
+      );
+    }
+    if (self?.closedArrival) {
+      throw new Error(`Bnovo createBooking refused: arrival is closed on ${input.checkIn} for room ${roomId}`);
     }
 
     const parts = input.guestName.trim().split(/\s+/);

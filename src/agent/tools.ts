@@ -133,13 +133,34 @@ export function buildTools(deps: {
           const tt = new Set(title.toLowerCase().replace(/[^a-zа-я0-9\s]/gi, ' ').split(/\s+/));
           return areaTokens.every((t) => tt.has(t));
         };
-        const applyFilters = (rows: Array<{ title: string; available: boolean; totalPrice?: number }>) => {
+        const applyFilters = (
+          rows: Array<{
+            title: string;
+            available: boolean;
+            nights?: number;
+            totalPrice?: number;
+            capacity?: number;
+            minStay?: number;
+          }>,
+        ) => {
+          const nights = rows[0]?.nights;
           const availableRows = rows.filter((r) => r.available);
           const total = availableRows.length;
           let results = availableRows;
+          // Capacity: never offer a room that can't sleep the party. Bnovo gives
+          // us the bed count; a room with a known, smaller capacity is dropped.
+          const tooSmall = availableRows.filter((r) => r.capacity != null && r.capacity < guests);
+          if (guests > 0) results = results.filter((r) => r.capacity == null || r.capacity >= guests);
           if (area) results = results.filter((r) => matchesArea(r.title));
           if (maxPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice <= maxPrice);
           if (minPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice >= minPrice);
+          // Min-stay: flag rooms whose owner set a longer minimum than requested,
+          // so the model can say "на эти даты минимум N ночей" instead of booking.
+          const nightsReq = typeof nights === 'number' ? nights : undefined;
+          const minStayBlocked = nightsReq != null
+            ? [...new Set(results.filter((r) => r.minStay && r.minStay > nightsReq).map((r) => `${r.title} (мин. ${r.minStay} ноч.)`))]
+            : [];
+          if (nightsReq != null) results = results.filter((r) => !r.minStay || r.minStay <= nightsReq);
           // When the guest named a specific address, tell apart "занято" from
           // "нет такой": list matching rooms that exist but are busy on the dates.
           const busyAtArea = area
@@ -156,7 +177,13 @@ export function buildTools(deps: {
             else if (busyAtArea.length > 0) note = `«${busyAtArea.join(', ')}» ЗАНЯТА на эти даты. Скажи гостю, что занята, и предложи другие даты/варианты. НЕ говори, что такой квартиры нет.`;
             else if (existsAtArea.length === 0) note = `Квартиры по запросу «${area}» в базе нет — предложи похожие из общего списка.`;
           }
-          return { total, filtered: results.length, results, busyAtArea, note };
+          // Capacity note takes priority when the party doesn't fit anywhere shown.
+          if (tooSmall.length > 0 && results.length === 0 && guests > 0) {
+            note = `Нет вариантов, вмещающих ${guests} гостей на эти даты. НЕ предлагай меньшие по вместимости квартиры. Предложи другие даты или скажи, что подходящего нет.`;
+          } else if (minStayBlocked.length > 0 && results.length === 0) {
+            note = `На эти даты действует ограничение минимального срока: ${minStayBlocked.join(', ')}. Предложи гостю бронировать на нужное число ночей или другие даты.`;
+          }
+          return { total, filtered: results.length, results, busyAtArea, minStayBlocked, note };
         };
 
         if (!ownerId || (await isDirectPms())) {
@@ -254,6 +281,26 @@ export function buildTools(deps: {
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          // Capacity refusal: room can't sleep the party. Don't downsell.
+          if (/sleeps \d+, but/i.test(msg)) {
+            return {
+              error: 'Эта квартира не вмещает столько гостей. Предложи вариант побольше — НЕ бронируй меньшую по вместимости.',
+            };
+          }
+          // Stay-length / arrival refusal: owner's min/max-nights or closed arrival.
+          const minStayM = msg.match(/minimum stay for \S+ is (\d+) nights/i);
+          if (minStayM) {
+            return {
+              error: `На эти даты минимальный срок брони — ${minStayM[1]} ноч. Предложи гостю забронировать минимум на ${minStayM[1]} ноч. или выбрать другие даты. НЕ бронируй на меньший срок.`,
+            };
+          }
+          const maxStayM = msg.match(/maximum stay for \S+ is (\d+) nights/i);
+          if (maxStayM) {
+            return { error: `На эти даты максимальный срок брони — ${maxStayM[1]} ноч. Предложи гостю сократить срок или другие даты.` };
+          }
+          if (/arrival is closed/i.test(msg)) {
+            return { error: 'На эту дату заезд закрыт. Предложи гостю другую дату заезда.' };
+          }
           // Overbooking guard (or PMS refusal): tell the model plainly so it
           // offers other dates/apartments instead of retrying the same slot.
           if (/refused|already booked|occupied|занят/i.test(msg)) {
@@ -406,6 +453,7 @@ export function buildTools(deps: {
           },
           checkIn: { type: 'string', description: 'Дата заезда YYYY-MM-DD — чтобы указать цену в подписи' },
           checkOut: { type: 'string', description: 'Дата выезда YYYY-MM-DD' },
+          guests: { type: 'integer', description: 'Число гостей — чтобы цена в подписи совпадала с check_availability' },
         },
         required: [],
       },
@@ -450,11 +498,14 @@ export function buildTools(deps: {
         // dates if given, else the next night, so the number is meaningful.
         const ci = (a.checkIn as string) || new Date().toISOString().slice(0, 10);
         const co = (a.checkOut as string) || new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        // Use the SAME guest count as the search, so the caption price matches
+        // the list price. A hardcoded 2 caused "8000 в подписи, 9000 в списке".
+        const pGuests = a.guests ? Number(a.guests) : 2;
         const priceById = new Map<string, number | undefined>();
         for (const id of validRaw) {
           try {
             const rc = await toRcId(id);
-            const av = rc ? await pms.checkAvailability({ propertyId: rc, checkIn: ci, checkOut: co, guests: 2 }) : [];
+            const av = rc ? await pms.checkAvailability({ propertyId: rc, checkIn: ci, checkOut: co, guests: pGuests }) : [];
             priceById.set(id, Array.isArray(av) ? av[0]?.totalPrice : undefined);
           } catch { /* ignore */ }
         }

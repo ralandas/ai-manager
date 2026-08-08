@@ -29,6 +29,14 @@ export interface AvailabilityResult {
   nights: number;
   /** Total price for the stay, if the PMS exposes it (omitted when unknown). */
   totalPrice?: number;
+  /** Max guests the room sleeps (from the PMS), if known. Filter/guard on this. */
+  capacity?: number;
+  /** Minimum nights required for THIS arrival date (0/undefined = no limit). */
+  minStay?: number;
+  /** Maximum nights allowed over the window (0/undefined = no limit). */
+  maxStay?: number;
+  /** True if arrival is closed on the requested check-in date. */
+  closedArrival?: boolean;
 }
 
 export interface CreateBookingInput {
