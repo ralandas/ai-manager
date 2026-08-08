@@ -14,6 +14,7 @@ import {
   setCheckoutTime,
   allBookingContacts,
   getBookingContact,
+  isPaymentWindowDead,
 } from '../store/booking-contacts.js';
 import {
   assertAutonomyEnabled,
@@ -41,6 +42,10 @@ export function buildTools(deps: {
   session: AgentSession;
 }): ToolSchema[] {
   const { pms, messenger, chatId, session } = deps;
+
+  // Payment hold window (must match the watcher): past this, an unpaid booking's
+  // invoice link is dead even if the watcher never got to flag it `cancelled`.
+  const cancelMs = config.PAYMENT_CANCEL_MS ?? 30 * 60 * 1000;
 
   const notifyOwner = async (text: string) => {
     if (config.OWNER_CHAT_ID) {
@@ -290,8 +295,8 @@ export function buildTools(deps: {
         assertAutonomyEnabled();
         const bookingId = (a.bookingId as string | undefined) ?? session.lastBookingId;
         if (!bookingId) return { error: 'В этом диалоге ещё нет созданной брони' };
-        if (getBookingContact(bookingId)?.cancelled) {
-          return { error: 'Эта бронь отменена (не оплачена вовремя) — старая ссылка недействительна. Нужно оформить бронь заново.' };
+        if (isPaymentWindowDead(getBookingContact(bookingId), cancelMs, Date.now())) {
+          return { error: 'Эта бронь отменена/просрочена (не оплачена вовремя) — старая ссылка недействительна. Нужно оформить бронь заново.' };
         }
         const link = await pms.getPaymentLink(bookingId);
         audit('get_payment_link', { chatId, bookingId, url: link.url });
@@ -312,15 +317,21 @@ export function buildTools(deps: {
       handler: async (a) => {
         const bookingId = (a.bookingId as string | undefined) ?? session.lastBookingId;
         if (!bookingId) return { error: 'В этом диалоге ещё нет созданной брони' };
-        // If we already auto-cancelled this booking (unpaid past the deadline),
-        // don't tell the guest to keep paying — the pay page is dead.
-        if (getBookingContact(bookingId)?.cancelled) {
-          return { bookingId, cancelled: true, note: 'Бронь была отменена (не оплачена вовремя). НЕ проси оплачивать по старой ссылке. Предложи оформить заново, если гость ещё хочет.' };
+        // Was this booking already paid? Confirm regardless of age — a paid
+        // booking is never "dead". Check paid FIRST so an old-but-paid booking
+        // still reports paid instead of being treated as an expired hold.
+        if (pms.isBookingPaid && (await pms.isBookingPaid(bookingId))) {
+          audit('check_payment', { chatId, bookingId, paid: true });
+          return { bookingId, paid: true };
+        }
+        // Unpaid + (cancelled OR hold window expired) => the pay page is dead.
+        // Don't tell the guest to keep paying an old, never-paid booking.
+        if (isPaymentWindowDead(getBookingContact(bookingId), cancelMs, Date.now())) {
+          return { bookingId, cancelled: true, note: 'Бронь была отменена/просрочена (не оплачена вовремя). НЕ проси оплачивать по старой ссылке. Предложи оформить заново, если гость ещё хочет.' };
         }
         if (!pms.isBookingPaid) return { error: 'Проверка оплаты недоступна для этого объекта' };
-        const paid = await pms.isBookingPaid(bookingId);
-        audit('check_payment', { chatId, bookingId, paid });
-        return { bookingId, paid };
+        audit('check_payment', { chatId, bookingId, paid: false });
+        return { bookingId, paid: false };
       },
     },
     {
