@@ -170,12 +170,23 @@ export class TelegramUserMessenger implements Messenger {
       const sender = await msg.getSender().catch(() => null);
       const senderName = sender instanceof Api.User ? sender.firstName ?? undefined : undefined;
 
+      // If the guest replied to one of our messages (usually a photo album whose
+      // caption is the apartment address+price), grab that caption so the agent
+      // can tell which apartment "эту"/"давайте её" refers to. Best-effort.
+      let quotedText: string | undefined;
+      if (msg.replyTo) {
+        const replied = await msg.getReplyMessage().catch(() => null);
+        const t = replied?.message?.trim();
+        if (t) quotedText = t;
+      }
+
       const incoming: IncomingMessage = {
         chatId,
         senderName,
         text: msg.message,
         providerMessageId: String(msg.id),
         timestamp: msg.date ?? Math.floor(Date.now() / 1000),
+        quotedText,
       };
       await this.onMessage(incoming);
     } catch (err) {

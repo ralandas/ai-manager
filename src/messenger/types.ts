@@ -14,6 +14,12 @@ export interface IncomingMessage {
   providerMessageId: string;
   /** Unix seconds. */
   timestamp: number;
+  /**
+   * Text/caption of the message this one replies to, if any. Guests often reply
+   * to a photo album ("5 Красноармейская 28 — 8000 ₽") with "эту"/"давайте её";
+   * the caption is our only clue which apartment they mean, so we surface it.
+   */
+  quotedText?: string;
 }
 
 export interface Messenger {
