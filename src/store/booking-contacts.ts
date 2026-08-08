@@ -83,3 +83,25 @@ export function patchBookingContact(bookingId: string, patch: Partial<BookingCon
 export function allBookingContacts(): BookingContact[] {
   return Object.values(load());
 }
+
+/**
+ * Is this booking's payment link effectively dead? True if we explicitly
+ * cancelled it (unpaid past the deadline) OR its hold window has long expired.
+ *
+ * The watcher only cancels bookings inside its polling window (createdAt within
+ * cancelMs + 1h). A booking created days ago fell out of that window before the
+ * cancel branch ever fired, so `cancelled` stays false even though its 30-min
+ * hold — and thus its invoice link — expired long ago. Guarding on age too means
+ * the bot never points a guest at a dead link for an old, never-paid booking.
+ */
+export function isPaymentWindowDead(
+  c: BookingContact | null,
+  cancelMs: number,
+  now: number,
+): boolean {
+  if (!c) return false;
+  if (c.cancelled) return true;
+  if (c.paidNotified) return false; // paid — link served its purpose, not "dead"
+  if (c.createdAt && now - c.createdAt > cancelMs) return true;
+  return false;
+}
