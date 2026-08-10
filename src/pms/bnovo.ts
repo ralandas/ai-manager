@@ -645,12 +645,30 @@ export class BnovoClient implements PmsConnector {
       const prev = seen.get(key);
       if (!prev || (!prev.available && r.available)) seen.set(key, r);
     }
-    // Disambiguate same-address entries that survived on different prices.
-    const byTitle = new Map<string, number>();
-    for (const r of seen.values()) byTitle.set(r.title, (byTitle.get(r.title) ?? 0) + 1);
-    return [...seen.values()].map((r) => {
-      if ((byTitle.get(r.title) ?? 0) > 1 && r.totalPrice) {
-        return { ...r, title: `${r.title} (${Math.round(r.totalPrice / Math.max(1, r.nights))}₽/ночь)` };
+    // Disambiguate same-address entries (different flats at one address, kept
+    // apart by price). Label them "вариант 1/2/…" in a STABLE order (by price)
+    // so the same physical flat reads identically in the list and later in the
+    // photo captions — otherwise the guest sees "Бронницкая 16" twice with
+    // different prices and can't tell which is which. The number is assigned by
+    // ascending price so it's deterministic across calls.
+    const survivors = [...seen.values()];
+    const byTitleCount = new Map<string, number>();
+    for (const r of survivors) byTitleCount.set(r.title, (byTitleCount.get(r.title) ?? 0) + 1);
+    // For each duplicated title, rank its rows by price to get a stable index.
+    const rankByTitle = new Map<string, string[]>(); // title -> propertyIds sorted by price
+    for (const title of byTitleCount.keys()) {
+      if ((byTitleCount.get(title) ?? 0) <= 1) continue;
+      const ranked = survivors
+        .filter((r) => r.title === title)
+        .sort((a, b) => (a.totalPrice ?? 0) - (b.totalPrice ?? 0))
+        .map((r) => r.propertyId);
+      rankByTitle.set(title, ranked);
+    }
+    return survivors.map((r) => {
+      const ranked = rankByTitle.get(r.title);
+      if (ranked) {
+        const idx = ranked.indexOf(r.propertyId) + 1; // 1-based
+        return { ...r, title: `${r.title}, вариант ${idx}` };
       }
       return r;
     });

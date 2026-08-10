@@ -100,6 +100,7 @@ export class Agent {
       messenger: this.messenger,
       chatId: msg.chatId,
       session,
+      turnMsgId: msg.providerMessageId,
     });
     const today = new Date().toISOString().slice(0, 10);
 

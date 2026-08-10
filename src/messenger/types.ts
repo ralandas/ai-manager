@@ -29,6 +29,13 @@ export interface Messenger {
   /** Send photos (by public URL) with an optional shared caption. */
   sendPhotos?(chatId: string, urls: string[], caption?: string): Promise<void>;
   /**
+   * True if a guest message NEWER than `sinceProviderMsgId` has arrived in this
+   * chat — used to abort a multi-album photo send when the guest already replied
+   * (picked a flat) mid-stream, so we stop trickling photos and continue the
+   * dialogue instead. Optional; transports that can't tell always return false.
+   */
+  hasNewerInbound?(chatId: string, sinceProviderMsgId: string): boolean;
+  /**
    * Register the HTTP webhook route(s) on the given Fastify instance and,
    * where applicable, tell the provider where to deliver updates.
    */

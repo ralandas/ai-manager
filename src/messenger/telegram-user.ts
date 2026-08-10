@@ -230,6 +230,18 @@ export class TelegramUserMessenger implements Messenger {
     return next;
   }
 
+  /**
+   * Has a guest message newer than `sinceProviderMsgId` landed in this chat?
+   * `lastSeen` tracks the highest inbound message id we've dispatched per chat,
+   * so if it now exceeds the id that started the current turn, the guest has
+   * sent something since — the photo loop uses this to stop mid-album.
+   */
+  hasNewerInbound(chatId: string, sinceProviderMsgId: string): boolean {
+    const since = Number(sinceProviderMsgId);
+    if (!Number.isFinite(since)) return false;
+    return (this.lastSeen.get(chatId) ?? 0) > since;
+  }
+
   async sendMessage(chatId: string, text: string): Promise<void> {
     await this.enqueueSend('sendMessage', () => this.client.sendMessage(chatId, { message: text }), chatId);
   }

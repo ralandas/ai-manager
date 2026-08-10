@@ -40,8 +40,11 @@ export function buildTools(deps: {
   messenger: Messenger;
   chatId: string;
   session: AgentSession;
+  /** Provider id of the message that triggered this turn — lets photo sending
+   *  bail out if a newer guest message arrives mid-album. */
+  turnMsgId?: string;
 }): ToolSchema[] {
-  const { pms, messenger, chatId, session } = deps;
+  const { pms, messenger, chatId, session, turnMsgId } = deps;
 
   // Payment hold window (must match the watcher): past this, an unpaid booking's
   // invoice link is dead even if the watcher never got to flag it `cancelled`.
@@ -536,20 +539,31 @@ export function buildTools(deps: {
         // the list price. A hardcoded 2 caused "8000 в подписи, 9000 в списке".
         const pGuests = a.guests ? Number(a.guests) : 2;
         const priceById = new Map<string, number | undefined>();
+        const availById = new Map<string, boolean>();
         for (const id of validRaw) {
           try {
             const rc = await toRcId(id);
             const av = rc ? await pms.checkAvailability({ propertyId: rc, checkIn: ci, checkOut: co, guests: pGuests }) : [];
             priceById.set(id, Array.isArray(av) ? av[0]?.totalPrice : undefined);
+            availById.set(id, Array.isArray(av) ? av[0]?.available !== false : true);
           } catch { /* ignore */ }
         }
+        // Don't send photos of flats that are BUSY on these dates — otherwise the
+        // list ("свободен только вариант 2") disagrees with the photos (both sent).
+        // Keep only available units; if EVERY requested unit is busy, fall back to
+        // showing them (so the tool still returns something) but flag busyTitles.
+        const busyTitles = validRaw
+          .filter((id) => availById.get(id) === false)
+          .map((id) => titles.get(id) ?? id);
+        const availableRaw = validRaw.filter((id) => availById.get(id) !== false);
+        const forPhotos = availableRaw.length > 0 ? availableRaw : validRaw;
 
         // Dedup by (address + price): several identical rooms at one address
         // (Рубинштейна 24 ×3 @8000) send once; genuinely different flats at the
         // same address (Бронницкая 16 @10000 vs @13000) each stay.
         const valid: string[] = [];
         const seenKey = new Set<string>();
-        for (const id of validRaw) {
+        for (const id of forPhotos) {
           const key = `${titles.get(id)}|${priceById.get(id) ?? '?'}`;
           if (seenKey.has(key)) continue;
           seenKey.add(key);
@@ -566,8 +580,30 @@ export function buildTools(deps: {
         const empty: string[] = [];
         const chosen = valid.slice(0, MAX_APTS);
 
+        // Same-address disambiguation for captions — must match check_availability's
+        // "вариант N" so the flat the guest saw in the list reads identically on its
+        // photos (Бронницкая 16 @15000 vs @19500). Rank by price, 1-based.
+        const titleCount = new Map<string, number>();
+        for (const id of chosen) titleCount.set(titles.get(id) ?? id, (titleCount.get(titles.get(id) ?? id) ?? 0) + 1);
+        const variantOf = new Map<string, number>(); // propertyId -> variant index (only if dup)
+        for (const [t, n] of titleCount) {
+          if (n <= 1) continue;
+          const ranked = chosen
+            .filter((id) => (titles.get(id) ?? id) === t)
+            .sort((a, b) => (priceById.get(a) ?? 0) - (priceById.get(b) ?? 0));
+          ranked.forEach((id, i) => variantOf.set(id, i + 1));
+        }
+
+        let stoppedEarly = false;
         for (let i = 0; i < chosen.length; i++) {
           const id = chosen[i]!;
+          // Guest replied/sent something new mid-album → stop sending the rest and
+          // let the dialogue continue (they already chose). Prevents the "photos
+          // keep trickling after I picked one" + double follow-up mess.
+          if (turnMsgId && messenger.hasNewerInbound?.(chatId, turnMsgId)) {
+            stoppedEarly = true;
+            break;
+          }
           // 1) local photos (admin upload), 2) fallback — PMS photos.
           let urls = listPhotoUrls(id);
           if (urls.length === 0 && pms.getPhotos) {
@@ -585,7 +621,11 @@ export function buildTools(deps: {
             continue;
           }
           const c = await card(id);
-          const baseTitle = titles.get(id) ?? id;
+          let baseTitle = titles.get(id) ?? id;
+          // If several flats at this address are in the batch, tag "вариант N"
+          // (same numbering as the list) so captions aren't ambiguous.
+          const v = variantOf.get(id);
+          if (v) baseTitle = `${baseTitle}, вариант ${v}`;
           // Always put the price in the caption (Al's request).
           const price = priceById.get(id);
           const caption = c
@@ -606,6 +646,11 @@ export function buildTools(deps: {
           sent: results.map((r) => titles.get(r.propertyId) ?? r.propertyId),
           remainingCount: remaining.length, // ask "показать ещё N?" if > 0
           remaining, // addresses not yet shown (cap)
+          // Guest sent a new message mid-send — we stopped; don't re-send/ask.
+          ...(stoppedEarly ? { stoppedEarly: true } : {}),
+          // Requested flats that are busy on these dates — NOT shown; tell the
+          // guest they're занята, don't claim their photos were sent.
+          ...(busyTitles.length ? { busyNotShown: busyTitles } : {}),
         };
       },
     },
