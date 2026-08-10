@@ -323,7 +323,7 @@ export function buildTools(deps: {
           // offers other dates/apartments instead of retrying the same slot.
           if (/refused|already booked|occupied|занят/i.test(msg)) {
             return {
-              error: 'Эти даты на выбранной квартире уже заняты. Предложи гостю другие даты или другую квартиру — НЕ создавай бронь на занятые даты.',
+              error: 'Причина: эта квартира ЗАНЯТА (забронирована) на эти даты — НЕ про вместимость. Скажи гостю именно «квартира занята на эти даты» (НЕ «не вмещает»). Предложи другие даты или другую квартиру. НЕ создавай бронь на занятые даты.',
             };
           }
           return { error: `Не удалось создать бронь: ${msg}` };
@@ -342,7 +342,23 @@ export function buildTools(deps: {
         await notifyOwner(
           `🆕 Бронь ${booking.id}: ${booking.propertyId}, ${booking.checkIn}→${booking.checkOut}, ${booking.guests} гост., ${booking.totalPrice}. Гость: ${booking.guestName}`,
         );
-        return booking;
+        // The Bnovo pay link is a FIRST-NIGHT PREPAYMENT, not the full total.
+        // Surface that split so the bot never quotes the total and then hands
+        // over a link showing a smaller number (guest: "а почему 8000?").
+        const nights = Math.max(
+          1,
+          Math.round((Date.parse(input.checkOut) - Date.parse(input.checkIn)) / 86400000),
+        );
+        const prepayment = Math.round(input.totalPrice / nights); // first night
+        return {
+          ...booking,
+          nights,
+          prepayment,
+          paymentNote:
+            `Ссылка на оплату — это ПРЕДОПЛАТА за 1-ю ночь: ${prepayment} ₽. ` +
+            `Всего за ${nights} ноч. — ${input.totalPrice} ₽, остаток при заселении. ` +
+            `Обязательно скажи гостю ОБЕ суммы: по ссылке спишется ${prepayment} ₽ (предоплата), всего ${input.totalPrice} ₽.`,
+        };
       },
     },
     {
