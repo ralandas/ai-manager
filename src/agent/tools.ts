@@ -149,8 +149,18 @@ export function buildTools(deps: {
           let results = availableRows;
           // Capacity: never offer a room that can't sleep the party. Bnovo gives
           // us the bed count; a room with a known, smaller capacity is dropped.
-          const tooSmall = availableRows.filter((r) => r.capacity != null && r.capacity < guests);
-          if (guests > 0) results = results.filter((r) => r.capacity == null || r.capacity >= guests);
+          // When the party exceeds a room's capacity Bnovo drops it from the
+          // tariff response entirely, so price AND capacity come back empty
+          // together — that pair means "doesn't fit", not "unknown". Treating it
+          // as unknown used to keep the room in results with no price, and the
+          // model then looped forever on «уточню стоимость» (it had a room to
+          // offer but never a number). A missing capacity WITH a price is a
+          // genuine unknown and still passes.
+          const doesNotFit = (r: { totalPrice?: number; capacity?: number }) =>
+            (r.capacity != null && r.capacity < guests) ||
+            (r.capacity == null && r.totalPrice == null);
+          const tooSmall = guests > 0 ? availableRows.filter(doesNotFit) : [];
+          if (guests > 0) results = results.filter((r) => !doesNotFit(r));
           if (area) results = results.filter((r) => matchesArea(r.title));
           if (maxPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice <= maxPrice);
           if (minPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice >= minPrice);
@@ -179,7 +189,15 @@ export function buildTools(deps: {
           }
           // Capacity note takes priority when the party doesn't fit anywhere shown.
           if (tooSmall.length > 0 && results.length === 0 && guests > 0) {
-            note = `Нет вариантов, вмещающих ${guests} гостей на эти даты. НЕ предлагай меньшие по вместимости квартиры. Предложи другие даты или скажи, что подходящего нет.`;
+            // Named address that exists and is free but is simply too small:
+            // say so outright. Otherwise the empty-results branch above would
+            // claim «такой квартиры нет», which is wrong and confusing.
+            const namedTooSmall = area
+              ? [...new Set(tooSmall.filter((r) => matchesArea(r.title)).map((r) => r.title))]
+              : [];
+            note = namedTooSmall.length > 0
+              ? `«${namedTooSmall.join(', ')}» НЕ вмещает ${guests} гостей (это точный ответ PMS, не «неизвестно»). Прямо скажи гостю, что на ${guests} гостей эта квартира не подходит, и предложи другую квартиру или меньше гостей. НЕ обещай «уточнить стоимость» — цены на такое размещение не существует, и повторный вызов инструмента ничего не изменит.`
+              : `Нет вариантов, вмещающих ${guests} гостей на эти даты. НЕ предлагай меньшие по вместимости квартиры. Предложи другие даты или скажи, что подходящего нет.`;
           } else if (minStayBlocked.length > 0 && results.length === 0) {
             note = `На эти даты действует ограничение минимального срока: ${minStayBlocked.join(', ')}. Предложи гостю бронировать на нужное число ночей или другие даты.`;
           }
