@@ -169,7 +169,16 @@ export function buildTools(deps: {
             (r.capacity == null && r.totalPrice == null);
           const tooSmall = guests > 0 ? availableRows.filter(doesNotFit) : [];
           if (guests > 0) results = results.filter((r) => !doesNotFit(r));
-          if (area) results = results.filter((r) => matchesArea(r.title));
+          // District word ("центр") vs address ("Рубинштейна 24"): a district is
+          // not part of any street-address title, so filtering by it drops
+          // everything and we'd lie "нет квартир". If the area has no house
+          // number AND matches no title at all, treat it as a district: DON'T
+          // apply the area filter (show the fund instead) and flag areaUnknown so
+          // the note steers the model to ask for a street/metro.
+          const areaHasDigit = area ? /\d/.test(area) : false;
+          const areaMatchesAny = area ? results.some((r) => matchesArea(r.title)) : true;
+          const areaUnknown = !!area && !areaMatchesAny && !areaHasDigit;
+          if (area && !areaUnknown) results = results.filter((r) => matchesArea(r.title));
           if (maxPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice <= maxPrice);
           if (minPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice >= minPrice);
           // Per-night budget: compare against totalPrice / nights, so "до 10000
@@ -204,7 +213,8 @@ export function buildTools(deps: {
           // as "нет такой" (deepseek sometimes does).
           let note: string | undefined;
           if (area) {
-            if (results.length > 0) note = `«${area}» свободна на эти даты — назови цену из results.`;
+            if (areaUnknown) note = `«${area}» — это район, а не адрес; по названию улицы отфильтровать нельзя. НЕ говори «нет квартир». Свободно ${total} вариантов — предложи показать их или уточни улицу/станцию метро.`;
+            else if (results.length > 0) note = `«${area}» свободна на эти даты — назови цену из results.`;
             else if (busyAtArea.length > 0) note = `«${busyAtArea.join(', ')}» ЗАНЯТА на эти даты. Скажи гостю, что занята, и предложи другие даты/варианты. НЕ говори, что такой квартиры нет.`;
             else if (existsAtArea.length === 0) note = `Квартиры по запросу «${area}» в базе нет — предложи похожие из общего списка.`;
           }
@@ -230,7 +240,7 @@ export function buildTools(deps: {
             // wants even longer). belowFloor is already handled above.
             note = `На эти даты действует ограничение минимального срока: ${minStayBlocked.join(', ')}. Предложи гостю бронировать на нужное число ночей или другие даты.`;
           }
-          return { total, filtered: results.length, results, busyAtArea, minStayBlocked, note };
+          return { total, filtered: results.length, results, busyAtArea, minStayBlocked, areaUnknown, note };
         };
 
         if (!ownerId || (await isDirectPms())) {
@@ -594,7 +604,13 @@ export function buildTools(deps: {
           .filter((id) => availById.get(id) === false)
           .map((id) => titles.get(id) ?? id);
         const availableRaw = validRaw.filter((id) => availById.get(id) !== false);
-        const forPhotos = availableRaw.length > 0 ? availableRaw : validRaw;
+        // Drop priceless phantom rooms, same rule as check_availability: a room
+        // Bnovo won't price for these dates is not a real offer — matching a
+        // query by address ("Рубинштейна 24") would otherwise pull an unsellable
+        // physical room in and caption it as a bogus "вариант 1". Keep priced
+        // ones; if that leaves nothing, fall back so the tool still returns.
+        const pricedRaw = availableRaw.filter((id) => priceById.get(id) != null);
+        const forPhotos = pricedRaw.length > 0 ? pricedRaw : availableRaw.length > 0 ? availableRaw : validRaw;
 
         // Dedup by (address + price): several identical rooms at one address
         // (Рубинштейна 24 ×3 @8000) send once; genuinely different flats at the
