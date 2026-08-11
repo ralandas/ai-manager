@@ -16,6 +16,7 @@ import {
   getBookingContact,
   isPaymentWindowDead,
 } from '../store/booking-contacts.js';
+import { logTranscript } from '../store/transcript.js';
 import {
   assertAutonomyEnabled,
   audit,
@@ -632,8 +633,10 @@ export function buildTools(deps: {
           const caption = c
             ? `${c.title}${c.price ? ` — ${c.price} ₽/ночь` : ''}`
             : `${baseTitle}${price ? ` — ${price} ₽` : ''}`;
+          const sentCount = Math.min(urls.length, MAX_PER_APT);
           await messenger.sendPhotos(chatId, urls.slice(0, MAX_PER_APT), caption);
-          audit('send_apartment_photos', { chatId, propertyId: id, count: Math.min(urls.length, MAX_PER_APT) });
+          logTranscript({ chatId, dir: 'out', kind: 'photo', text: caption, photoCount: sentCount });
+          audit('send_apartment_photos', { chatId, propertyId: id, count: sentCount });
           results.push({ propertyId: id, sent: Math.min(urls.length, MAX_PER_APT) });
         }
 

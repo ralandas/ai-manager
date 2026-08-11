@@ -5,6 +5,7 @@ import type { PmsConnector } from '../pms/types.js';
 import { buildTools } from './tools.js';
 import { systemPrompt } from './prompt.js';
 import { loadConversation, saveConversation } from '../store/conversations.js';
+import { logTranscript } from '../store/transcript.js';
 import { config } from '../config.js';
 
 const MAX_HISTORY = 30;
@@ -85,6 +86,17 @@ export class Agent {
     if (this.seen.has(dedupKey)) return;
     this.seen.add(dedupKey);
 
+    // Durable record of the guest's message (before any turn processing) so the
+    // full dialog can be reviewed later even after history is trimmed.
+    logTranscript({
+      chatId: msg.chatId,
+      dir: 'in',
+      kind: 'text',
+      text: msg.text,
+      senderName: msg.senderName,
+      providerMessageId: msg.providerMessageId,
+    });
+
     // Load persisted context for this chat (survives restarts).
     const { history, session } = loadConversation(msg.chatId);
     // If the guest replied to one of our messages (e.g. a photo album captioned
@@ -145,6 +157,7 @@ export class Agent {
     // Persist trimmed history + session (session may hold lastBookingId).
     saveConversation(msg.chatId, { history: history.slice(-MAX_HISTORY), session });
 
+    logTranscript({ chatId: msg.chatId, dir: 'out', kind: 'text', text: reply });
     await this.messenger.sendMessage(msg.chatId, reply);
   }
 }
