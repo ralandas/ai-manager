@@ -168,13 +168,18 @@ export function buildTools(deps: {
           if (area) results = results.filter((r) => matchesArea(r.title));
           if (maxPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice <= maxPrice);
           if (minPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice >= minPrice);
-          // Min-stay: flag rooms whose owner set a longer minimum than requested,
-          // so the model can say "на эти даты минимум N ночей" instead of booking.
+          // Min-stay: block stays shorter than the effective minimum, which is
+          // the max of the house-wide floor (config.MIN_NIGHTS — Bnovo returns
+          // no per-room minstay for these flats, so the global floor is what
+          // enforces the owner's "не меньше 3 суток" rule) and any per-room
+          // Bnovo minstay. Flag blocked rooms so the model says "минимум N ночей"
+          // instead of offering/booking a too-short stay.
           const nightsReq = typeof nights === 'number' ? nights : undefined;
+          const effMin = (r: { minStay?: number }) => Math.max(config.MIN_NIGHTS, r.minStay ?? 0);
           const minStayBlocked = nightsReq != null
-            ? [...new Set(results.filter((r) => r.minStay && r.minStay > nightsReq).map((r) => `${r.title} (мин. ${r.minStay} ноч.)`))]
+            ? [...new Set(results.filter((r) => effMin(r) > nightsReq).map((r) => `${r.title} (мин. ${effMin(r)} ноч.)`))]
             : [];
-          if (nightsReq != null) results = results.filter((r) => !r.minStay || r.minStay <= nightsReq);
+          if (nightsReq != null) results = results.filter((r) => effMin(r) <= nightsReq);
           // When the guest named a specific address, tell apart "занято" from
           // "нет такой": list matching rooms that exist but are busy on the dates.
           const busyAtArea = area
@@ -191,8 +196,14 @@ export function buildTools(deps: {
             else if (busyAtArea.length > 0) note = `«${busyAtArea.join(', ')}» ЗАНЯТА на эти даты. Скажи гостю, что занята, и предложи другие даты/варианты. НЕ говори, что такой квартиры нет.`;
             else if (existsAtArea.length === 0) note = `Квартиры по запросу «${area}» в базе нет — предложи похожие из общего списка.`;
           }
-          // Capacity note takes priority when the party doesn't fit anywhere shown.
-          if (tooSmall.length > 0 && results.length === 0 && guests > 0) {
+          // Global min-nights floor takes priority over everything: if the guest
+          // asked for fewer than MIN_NIGHTS nights, that's the reason nothing is
+          // offered — not capacity, not "занято". Say the rule once.
+          const belowFloor = nightsReq != null && nightsReq < config.MIN_NIGHTS;
+          if (belowFloor && results.length === 0) {
+            note = `Бронь минимум на ${config.MIN_NIGHTS} ноч. Гость просит ${nightsReq} — скажи, что минимальный срок ${config.MIN_NIGHTS} суток, и предложи забронировать минимум на ${config.MIN_NIGHTS} ноч. или другие даты. НЕ бронируй на меньший срок и НЕ говори про вместимость/занятость как причину.`;
+          } else if (tooSmall.length > 0 && results.length === 0 && guests > 0) {
+            // Capacity note: the party doesn't fit anywhere shown.
             // Named address that exists and is free but is simply too small:
             // say so outright. Otherwise the empty-results branch above would
             // claim «такой квартиры нет», which is wrong and confusing.
@@ -203,6 +214,8 @@ export function buildTools(deps: {
               ? `«${namedTooSmall.join(', ')}» НЕ вмещает ${guests} гостей (это точный ответ PMS, не «неизвестно»). Прямо скажи гостю, что на ${guests} гостей эта квартира не подходит, и предложи другую квартиру или меньше гостей. НЕ обещай «уточнить стоимость» — цены на такое размещение не существует, и повторный вызов инструмента ничего не изменит.`
               : `Нет вариантов, вмещающих ${guests} гостей на эти даты. НЕ предлагай меньшие по вместимости квартиры. Предложи другие даты или скажи, что подходящего нет.`;
           } else if (minStayBlocked.length > 0 && results.length === 0) {
+            // Per-room minstay (request is >= global floor but a specific flat
+            // wants even longer). belowFloor is already handled above.
             note = `На эти даты действует ограничение минимального срока: ${minStayBlocked.join(', ')}. Предложи гостю бронировать на нужное число ночей или другие даты.`;
           }
           return { total, filtered: results.length, results, busyAtArea, minStayBlocked, note };
@@ -281,6 +294,18 @@ export function buildTools(deps: {
           totalPrice: Number(a.totalPrice),
         };
         validateBooking(input);
+        // House-policy minimum-nights floor. Bnovo returns no per-room minstay
+        // for these flats, so the connector won't refuse a too-short stay — we
+        // must block it here before creating the booking.
+        const reqNights = Math.max(
+          0,
+          Math.round((Date.parse(input.checkOut) - Date.parse(input.checkIn)) / 86400000),
+        );
+        if (reqNights > 0 && reqNights < config.MIN_NIGHTS) {
+          return {
+            error: `Минимальный срок брони — ${config.MIN_NIGHTS} суток, а запрошено ${reqNights}. НЕ создавай бронь: скажи гостю, что бронируем минимум на ${config.MIN_NIGHTS} ноч., и предложи продлить срок или другие даты.`,
+          };
+        }
         const cardId = a.propertyId as string;
         const rcId = await toRcId(cardId);
         if (!rcId) {

@@ -82,6 +82,11 @@ const schema = z.object({
   AUTONOMY_ENABLED: bool(true),
   MAX_BOOKING_TOTAL: z.coerce.number().default(1_000_000),
   MIN_BOOKING_TOTAL: z.coerce.number().default(1_000),
+  // House policy: minimum nights per stay, applied globally on top of any
+  // per-room Bnovo minstay (the effective floor is the max of the two). Bnovo
+  // returns no minstay for these flats, so this is what actually enforces the
+  // owner's "не бронировать меньше 3 суток" rule. Set MIN_NIGHTS=1 to disable.
+  MIN_NIGHTS: z.coerce.number().default(3),
 });
 
 export type Config = z.infer<typeof schema>;
