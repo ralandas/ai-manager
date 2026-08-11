@@ -32,9 +32,11 @@ export interface Messenger {
    * True if a guest message NEWER than `sinceProviderMsgId` has arrived in this
    * chat — used to abort a multi-album photo send when the guest already replied
    * (picked a flat) mid-stream, so we stop trickling photos and continue the
-   * dialogue instead. Optional; transports that can't tell always return false.
+   * dialogue instead. Async because in polling mode the turn blocks the poll
+   * loop, so the transport must peek Telegram live rather than read a counter.
+   * Optional; transports that can't tell always resolve false.
    */
-  hasNewerInbound?(chatId: string, sinceProviderMsgId: string): boolean;
+  hasNewerInbound?(chatId: string, sinceProviderMsgId: string): Promise<boolean>;
   /**
    * Register the HTTP webhook route(s) on the given Fastify instance and,
    * where applicable, tell the provider where to deliver updates.

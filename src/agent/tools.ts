@@ -599,8 +599,9 @@ export function buildTools(deps: {
           const id = chosen[i]!;
           // Guest replied/sent something new mid-album → stop sending the rest and
           // let the dialogue continue (they already chose). Prevents the "photos
-          // keep trickling after I picked one" + double follow-up mess.
-          if (turnMsgId && messenger.hasNewerInbound?.(chatId, turnMsgId)) {
+          // keep trickling after I picked one" + double follow-up mess. Skip the
+          // check before the first album (i===0) — nothing sent yet to interrupt.
+          if (i > 0 && turnMsgId && messenger.hasNewerInbound && (await messenger.hasNewerInbound(chatId, turnMsgId))) {
             stoppedEarly = true;
             break;
           }

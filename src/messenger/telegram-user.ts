@@ -232,14 +232,29 @@ export class TelegramUserMessenger implements Messenger {
 
   /**
    * Has a guest message newer than `sinceProviderMsgId` landed in this chat?
-   * `lastSeen` tracks the highest inbound message id we've dispatched per chat,
-   * so if it now exceeds the id that started the current turn, the guest has
-   * sent something since — the photo loop uses this to stop mid-album.
+   *
+   * In polling mode the whole turn (incl. photo sending) runs INSIDE the poll
+   * loop, so `lastSeen` isn't updated until the turn ends — reading it here
+   * would always say "no". Instead we peek Telegram live: fetch the newest
+   * message in the dialog and check if its id is higher AND it's inbound (not
+   * one of our own sends). Best-effort: any error resolves false so a network
+   * blip never aborts a legitimate photo send.
    */
-  hasNewerInbound(chatId: string, sinceProviderMsgId: string): boolean {
+  async hasNewerInbound(chatId: string, sinceProviderMsgId: string): Promise<boolean> {
     const since = Number(sinceProviderMsgId);
     if (!Number.isFinite(since)) return false;
-    return (this.lastSeen.get(chatId) ?? 0) > since;
+    try {
+      const msgs = await this.withTimeout(
+        this.client.getMessages(chatId, { limit: 1 }),
+        8000,
+        'peekNewer',
+      );
+      const top = msgs?.[0];
+      // Newer inbound (not our own outgoing) than the turn's triggering message.
+      return !!top && !top.out && top.id > since;
+    } catch {
+      return false;
+    }
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
