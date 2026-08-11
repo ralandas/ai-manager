@@ -114,7 +114,11 @@ export class WaveSpeedProvider implements LlmProvider {
             'Content-Type': 'application/json',
           },
           body,
-          signal: AbortSignal.timeout(120_000),
+          // Per-attempt timeout. Kept short so a slow/hung upstream can't freeze
+          // a chat turn for minutes: in polling mode the poll loop awaits the
+          // turn, so a long hang blocks the WHOLE bot, not just one reply. Three
+          // 30s attempts (~90s worst case) beats one 120s attempt × 3 = 6 min.
+          signal: AbortSignal.timeout(30_000),
         });
         const text = await res.text();
         if (!res.ok) {
