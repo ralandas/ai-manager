@@ -634,13 +634,24 @@ export class BnovoClient implements PmsConnector {
     // A specific room was asked for — return it as-is (no dedup).
     if (q.propertyId) return rows;
 
+    // Drop AVAILABLE rooms that came back with no price for these dates. Bnovo
+    // omits the tariff for a room that can't actually be sold on the requested
+    // window (over capacity for the party, or no rate loaded) — such a row is
+    // NOT a real offer. Leaving it in was the root of a whole class of bugs:
+    // it became a phantom "вариант N" next to the real flat at the same address
+    // (dedup keys on title|price, and a priceless row gets its own key), the
+    // model quoted/offered it, and booking it then failed with "занят" because
+    // the underlying physical room was busy or unsellable. No price on the dates
+    // = not shown. (Busy rooms keep flowing through so we can still say "занята".)
+    const priced = rows.filter((r) => !r.available || r.totalPrice != null);
+
     // Bnovo lists several physical rooms under the same address (e.g. three
     // "Владимирский проспект 10"). Collapse duplicates so the guest sees each
     // distinct offer once, keyed by (address + price): different prices at one
     // address ARE different flats (Бр16-1 10000 vs Бр16-2 13000) and stay
     // separate; identical ones fold into a single, preferably-available entry.
     const seen = new Map<string, (typeof rows)[number]>();
-    for (const r of rows) {
+    for (const r of priced) {
       const key = `${r.title}|${r.totalPrice ?? '?'}`;
       const prev = seen.get(key);
       if (!prev || (!prev.available && r.available)) seen.set(key, r);

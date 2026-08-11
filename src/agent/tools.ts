@@ -105,7 +105,7 @@ export function buildTools(deps: {
     {
       name: 'check_availability',
       description:
-        'Проверить доступность и стоимость на даты. Даты YYYY-MM-DD, checkOut — день выезда. Если свободных много, можно сузить: area (район/улица, напр. "Невский", "Василеостровский") и/или maxPrice/minPrice (бюджет за весь период). Ответ содержит total (сколько всего свободно) и results (после фильтра).',
+        'Проверить доступность и стоимость на даты. Даты YYYY-MM-DD, checkOut — день выезда. Если свободных много, можно сузить: area (район/улица, напр. "Невский", "Василеостровский") и бюджет. ВАЖНО про бюджет: если гость назвал сумму ЗА НОЧЬ («до 10000 в сутки», «5к за ночь») — используй maxPricePerNight/minPricePerNight; если ЗА ВЕСЬ период — maxPrice/minPrice. Если гость сказал просто «до 10000» без уточнения — это ЗА НОЧЬ (maxPricePerNight). Ответ содержит total (сколько всего свободно) и results (после фильтра).',
       parameters: {
         type: 'object',
         properties: {
@@ -114,8 +114,10 @@ export function buildTools(deps: {
           checkOut: { type: 'string', description: 'Дата выезда YYYY-MM-DD' },
           guests: { type: 'integer', description: 'Число гостей' },
           area: { type: 'string', description: 'Фильтр по району/улице (подстрока адреса)' },
-          maxPrice: { type: 'integer', description: 'Не дороже этой суммы за весь период' },
-          minPrice: { type: 'integer', description: 'Не дешевле этой суммы за весь период' },
+          maxPrice: { type: 'integer', description: 'Не дороже этой суммы за ВЕСЬ период' },
+          minPrice: { type: 'integer', description: 'Не дешевле этой суммы за ВЕСЬ период' },
+          maxPricePerNight: { type: 'integer', description: 'Не дороже этой суммы ЗА НОЧЬ (умножается на число ночей)' },
+          minPricePerNight: { type: 'integer', description: 'Не дешевле этой суммы ЗА НОЧЬ' },
         },
         required: ['checkIn', 'checkOut', 'guests'],
       },
@@ -126,6 +128,8 @@ export function buildTools(deps: {
         const area = a.area ? String(a.area).toLowerCase() : undefined;
         const maxPrice = a.maxPrice ? Number(a.maxPrice) : undefined;
         const minPrice = a.minPrice ? Number(a.minPrice) : undefined;
+        const maxPricePerNight = a.maxPricePerNight ? Number(a.maxPricePerNight) : undefined;
+        const minPricePerNight = a.minPricePerNight ? Number(a.minPricePerNight) : undefined;
 
         // Token match for area/address: "гороховая 79" must match title
         // "Гороховая улица 79" — a plain substring check fails on the "улица".
@@ -168,6 +172,14 @@ export function buildTools(deps: {
           if (area) results = results.filter((r) => matchesArea(r.title));
           if (maxPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice <= maxPrice);
           if (minPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice >= minPrice);
+          // Per-night budget: compare against totalPrice / nights, so "до 10000
+          // за ночь" doesn't wrongly reject a 12000-for-3-nights flat (4000/n).
+          const perNight = (r: { totalPrice?: number }) =>
+            r.totalPrice != null && nights ? r.totalPrice / nights : undefined;
+          if (maxPricePerNight != null)
+            results = results.filter((r) => { const p = perNight(r); return p != null && p <= maxPricePerNight; });
+          if (minPricePerNight != null)
+            results = results.filter((r) => { const p = perNight(r); return p != null && p >= minPricePerNight; });
           // Min-stay: block stays shorter than the effective minimum, which is
           // the max of the house-wide floor (config.MIN_NIGHTS — Bnovo returns
           // no per-room minstay for these flats, so the global floor is what
