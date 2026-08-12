@@ -1,7 +1,6 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
 import { logger } from '../logger.js';
+import { dataPath, writeJsonAtomic } from './paths.js';
 import type { LlmMessage } from '../llm/types.js';
 import type { AgentSession } from '../agent/tools.js';
 
@@ -13,9 +12,7 @@ import type { AgentSession } from '../agent/tools.js';
  * both to a JSON file (same simple approach as booking-contacts) so a restart
  * or crash keeps the context. Swap for Postgres later if volume grows.
  */
-const __dir = dirname(fileURLToPath(import.meta.url));
-const DIR = join(__dir, '../../data');
-const PATH = join(DIR, 'conversations.json');
+const FILE = 'conversations.json';
 
 interface ConversationRecord {
   history: LlmMessage[];
@@ -25,9 +22,10 @@ interface ConversationRecord {
 type Store = Record<string, ConversationRecord>;
 
 function load(): Store {
-  if (!existsSync(PATH)) return {};
+  const path = dataPath(FILE);
+  if (!existsSync(path)) return {};
   try {
-    return JSON.parse(readFileSync(PATH, 'utf8')) as Store;
+    return JSON.parse(readFileSync(path, 'utf8')) as Store;
   } catch (err) {
     logger.error({ err }, 'conversations: parse failed, starting empty');
     return {};
@@ -35,8 +33,7 @@ function load(): Store {
 }
 
 function save(all: Store): void {
-  if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
-  writeFileSync(PATH, JSON.stringify(all));
+  writeJsonAtomic(FILE, all);
 }
 
 export interface ConversationState {

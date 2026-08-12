@@ -79,14 +79,18 @@ const schema = z.object({
 
   DATABASE_URL: z.string().optional(),
 
+  // Per-process data directory for the JSON stores (conversations, booking
+  // contacts, transcript). TWO bot processes run (RC + Bnovo) from one checkout;
+  // if they share ./data they clobber each other's conversations.json on every
+  // message (read-whole-map → edit one key → write-whole-map races) and a
+  // Bnovo-owned watcher picks up RC bookings from the shared contacts file.
+  // Give each process its own dir (e.g. data/bnovo) to isolate them. Empty =
+  // legacy ./data (single-process default).
+  DATA_DIR: z.string().optional(),
+
   AUTONOMY_ENABLED: bool(true),
   MAX_BOOKING_TOTAL: z.coerce.number().default(1_000_000),
   MIN_BOOKING_TOTAL: z.coerce.number().default(1_000),
-  // House policy: minimum nights per stay, applied globally on top of any
-  // per-room Bnovo minstay (the effective floor is the max of the two). Bnovo
-  // returns no minstay for these flats, so this is what actually enforces the
-  // owner's "не бронировать меньше 3 суток" rule. Set MIN_NIGHTS=1 to disable.
-  MIN_NIGHTS: z.coerce.number().default(3),
 });
 
 export type Config = z.infer<typeof schema>;

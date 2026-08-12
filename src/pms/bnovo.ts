@@ -87,6 +87,23 @@ interface RoomRestriction {
   maxStay: number;
   closedArrival: boolean;
 }
+
+/**
+ * GET /tariff/getPricesAndRestrictionsData?...&parts=restrictions — the cabinet's
+ * real per-room-type, per-date restriction grid (values are strings like "3").
+ * restrictions[roomTypeId][YYYY-MM-DD] = { minstay, minstay_a, maxstay, ... }.
+ */
+interface BnovoRestrictionCell {
+  minstay?: string | number;
+  minstay_a?: string | number;
+  maxstay?: string | number;
+  closed?: string | boolean;
+  closed_arrival?: string | boolean;
+  closed_departure?: string | boolean;
+}
+interface BnovoRestrictionsResponse {
+  data?: { restrictions?: Record<string, Record<string, BnovoRestrictionCell>> };
+}
 interface BnovoVariationResponse {
   result: string;
   data?: {
@@ -486,18 +503,22 @@ export class BnovoClient implements PmsConnector {
     const capByLabel = new Map<string, number>();
     const resByTypeId = new Map<number, RoomRestriction>();
     const resByLabel = new Map<string, RoomRestriction>();
-    const res = await this.request<BnovoVariationResponse>('post', '/roomTypes/getRoomTypeVariation', {
-      body: JSON.stringify({
-        adultCustomerCount: Math.max(1, guests),
-        childrenAges: {},
-        dateFrom: checkIn,
-        dateTo: checkOut,
-        planId: Number(this.planId),
-        isEarlyArrival: false,
-        isLateDeparture: false,
+    // Fetch prices/capacity (variation) and the REAL restriction grid together.
+    const [res, restrictions] = await Promise.all([
+      this.request<BnovoVariationResponse>('post', '/roomTypes/getRoomTypeVariation', {
+        body: JSON.stringify({
+          adultCustomerCount: Math.max(1, guests),
+          childrenAges: {},
+          dateFrom: checkIn,
+          dateTo: checkOut,
+          planId: Number(this.planId),
+          isEarlyArrival: false,
+          isLateDeparture: false,
+        }),
+        headers: { 'content-type': 'application/json' },
       }),
-      headers: { 'content-type': 'application/json' },
-    });
+      this.fetchRestrictions(checkIn, checkOut),
+    ]);
     for (const v of res?.data?.variation ?? []) {
       const p = v.placings?.[0];
       const label = v.roomtype_name ? this.normLabel(v.roomtype_name) : undefined;
@@ -516,8 +537,10 @@ export class BnovoClient implements PmsConnector {
         if (label) capByLabel.set(label, cap);
       }
 
-      // Restrictions for THIS arrival date (minstay_a) + window min/max.
-      const restriction = this.restrictionOf(p, checkIn);
+      // Restrictions from the real grid (getRoomTypeVariation's are all-zero for
+      // this hotel). Key by roomtype id; also mirror to label so the label-based
+      // lookup path resolves too.
+      const restriction = v.roomtype_id != null ? restrictions.get(v.roomtype_id) : undefined;
       if (restriction) {
         if (v.roomtype_id != null) resByTypeId.set(v.roomtype_id, restriction);
         if (label) resByLabel.set(label, restriction);
@@ -543,26 +566,50 @@ export class BnovoClient implements PmsConnector {
   }
 
   /**
-   * Collapse a placing's per-day date_restrictions into one object for the stay:
-   *   - minStay: the arrival-date minimum (minstay_a, else minstay)
-   *   - maxStay: the smallest positive maxstay across the window (0 = no limit)
-   *   - closedArrival: arrival closed on the check-in date
+   * REAL per-room-type stay restrictions for a window, from the cabinet's
+   * price/restrictions grid — the same data the tariff calendar shows.
+   *
+   * getRoomTypeVariation's date_restrictions come back all-zero for this hotel
+   * (min-stay isn't populated there), so it silently allowed 1-2 night bookings
+   * where the owner requires 3 (and wrongly blocked the flats that really allow
+   * 2). This endpoint is the source of truth: `restrictions[roomTypeId][date] =
+   * { minstay, minstay_a, maxstay, closed_arrival, ... }`. We distil each room
+   * type to one RoomRestriction for the stay: minStay from the arrival date,
+   * maxStay = smallest positive across the window, closedArrival on check-in.
+   * Keyed by roomTypeId so it slots straight into the existing resByTypeId path.
    */
-  private restrictionOf(
-    p: { date_restrictions?: Record<string, BnovoDateRestriction> } | undefined,
+  private async fetchRestrictions(
     checkIn: string,
-  ): RoomRestriction | undefined {
-    const dr = p?.date_restrictions;
-    if (!dr) return undefined;
-    const arr = dr[checkIn];
-    const minStay = Math.max(0, arr?.minstay_a || arr?.minstay || 0);
-    let maxStay = 0;
-    for (const r of Object.values(dr)) {
-      if (r?.maxstay && r.maxstay > 0) maxStay = maxStay === 0 ? r.maxstay : Math.min(maxStay, r.maxstay);
+    checkOut: string,
+  ): Promise<Map<number, RoomRestriction>> {
+    const out = new Map<number, RoomRestriction>();
+    // dateFrom uses the cabinet's D-M-YYYY form (as seen in the panel request).
+    const [y, m, d] = checkIn.split('-');
+    const dateFrom = `${Number(d)}-${Number(m)}-${y}`;
+    const res = await this.request<BnovoRestrictionsResponse>(
+      'get',
+      `/tariff/getPricesAndRestrictionsData?planId=${this.planId}&dateFrom=${dateFrom}&withDynamicPrices=0&parts=restrictions`,
+      {},
+    );
+    const grid = res?.data?.restrictions;
+    if (!grid) return out;
+    // Arrival-date minimum; window is [checkIn, checkOut).
+    for (const [typeIdStr, byDate] of Object.entries(grid)) {
+      const typeId = Number(typeIdStr);
+      if (!Number.isFinite(typeId) || !byDate) continue;
+      const arr = byDate[checkIn];
+      const minStay = Math.max(0, Number(arr?.minstay_a || arr?.minstay || 0));
+      let maxStay = 0;
+      for (const [date, r] of Object.entries(byDate)) {
+        if (date < checkIn || date >= checkOut) continue; // only nights of the stay
+        const mx = Number(r?.maxstay || 0);
+        if (mx > 0) maxStay = maxStay === 0 ? mx : Math.min(maxStay, mx);
+      }
+      const closedArrival = arr?.closed_arrival === '1' || arr?.closed_arrival === true;
+      if (minStay === 0 && maxStay === 0 && !closedArrival) continue;
+      out.set(typeId, { minStay, maxStay, closedArrival });
     }
-    const closedArrival = !!arr?.closed_arrival;
-    if (minStay === 0 && maxStay === 0 && !closedArrival) return undefined;
-    return { minStay, maxStay, closedArrival };
+    return out;
   }
 
   /** Normalize a room label for matching — labels differ in spacing/case across

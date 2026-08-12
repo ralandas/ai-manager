@@ -1,7 +1,6 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
 import { logger } from '../logger.js';
+import { dataPath, writeJsonAtomic } from './paths.js';
 
 /**
  * Maps a PMS booking to the messenger chat that created it, so we can reach the
@@ -10,9 +9,7 @@ import { logger } from '../logger.js';
  *
  * Simple JSON file — fine for the pilot's volume; swap for Postgres later.
  */
-const __dir = dirname(fileURLToPath(import.meta.url));
-const DIR = join(__dir, '../../data');
-const PATH = join(DIR, 'booking-contacts.json');
+const FILE = 'booking-contacts.json';
 
 export interface BookingContact {
   bookingId: string;
@@ -32,9 +29,10 @@ export interface BookingContact {
 }
 
 function load(): Record<string, BookingContact> {
-  if (!existsSync(PATH)) return {};
+  const path = dataPath(FILE);
+  if (!existsSync(path)) return {};
   try {
-    return JSON.parse(readFileSync(PATH, 'utf8')) as Record<string, BookingContact>;
+    return JSON.parse(readFileSync(path, 'utf8')) as Record<string, BookingContact>;
   } catch (err) {
     logger.error({ err }, 'booking-contacts: parse failed, starting empty');
     return {};
@@ -42,8 +40,7 @@ function load(): Record<string, BookingContact> {
 }
 
 function save(all: Record<string, BookingContact>): void {
-  if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true });
-  writeFileSync(PATH, JSON.stringify(all, null, 2));
+  writeJsonAtomic(FILE, all);
 }
 
 export function rememberBookingContact(c: BookingContact): void {
