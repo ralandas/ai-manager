@@ -136,6 +136,12 @@ interface BnovoBookingsResponse {
   errors?: unknown[];
 }
 
+/** A metro stop near a flat, parsed from the owner's description. */
+export interface MetroStop {
+  station: string;
+  walkMin?: number;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export class BnovoClient implements PmsConnector {
@@ -293,7 +299,7 @@ export class BnovoClient implements PmsConnector {
     null;
   private namesCache: Map<string, string> | null = null;
   /** room_type_id -> presentation (address + description + photos), cached per process. */
-  private presCache = new Map<string, { address?: string; description?: string; photos: string[] }>();
+  private presCache = new Map<string, { address?: string; description?: string; photos: string[]; metro?: MetroStop[] }>();
   /** true once listProperties has enriched titles with real addresses. */
   private addressesEnriched = false;
 
@@ -307,11 +313,11 @@ export class BnovoClient implements PmsConnector {
    */
   private async presentation(
     roomTypeId: string,
-  ): Promise<{ address?: string; description?: string; photos: string[] }> {
+  ): Promise<{ address?: string; description?: string; photos: string[]; metro?: MetroStop[] }> {
     const key = String(roomTypeId);
     const cached = this.presCache.get(key);
     if (cached) return cached;
-    let out: { address?: string; description?: string; photos: string[] } = { photos: [] };
+    let out: { address?: string; description?: string; photos: string[]; metro?: MetroStop[] } = { photos: [] };
     try {
       const resp = await this.request<BnovoPresentationResponse>(
         'post',
@@ -323,7 +329,7 @@ export class BnovoClient implements PmsConnector {
           .map((p) => p.url)
           .filter((u): u is string => typeof u === 'string' && u.length > 0);
         const description = resp.data.pms_room_type?.description;
-        out = { address: this.parseAddress(description), description, photos };
+        out = { address: this.parseAddress(description), description, photos, metro: this.parseMetro(description) };
       }
     } catch (err) {
       logger.warn({ roomTypeId, err }, 'Bnovo presentation fetch failed');
@@ -342,6 +348,45 @@ export class BnovoClient implements PmsConnector {
     const entry = rooms.get(String(propertyId));
     if (!entry) return null;
     return (await this.presentation(String(entry.roomTypeId))).description ?? null;
+  }
+
+  /**
+   * Pull metro stops from the owner's description. They write a "Метро:" block:
+   *   Метро:
+   *   ◆Технологический институт (7 минут пешком)
+   *   ◆ Фрунзенская (7 минут пешком)
+   * Returns [{ station, walkMin }]. Best-effort; empty if no block/parse.
+   */
+  private parseMetro(description?: string): MetroStop[] {
+    if (!description) return [];
+    const stops: MetroStop[] = [];
+    const seen = new Set<string>();
+    const lines = description.split('\n');
+    // Find the "Метро:" HEADER line (colon form), then read the ◆-bullet lines
+    // right under it. Anchoring on the header (not the word "метро", which also
+    // appears in the intro prose and in "К услугам гостей" bullet lists) keeps
+    // us from grabbing amenities as stations.
+    let inBlock = false;
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (/^метро\s*:/i.test(line)) { inBlock = true; continue; }
+      if (!inBlock) continue;
+      const isBullet = /^[◆•▪●]/.test(line);
+      if (!isBullet) {
+        if (line === '') continue; // tolerate a blank line inside the block
+        break; // next section header — stop
+      }
+      const t = line.replace(/^[◆•▪●\s]+/, '').trim();
+      const walk = t.match(/(\d+)\s*мин/i);
+      const station = t.replace(/\(.*$/, '').replace(/\s+\d+\s*мин.*$/i, '').trim();
+      if (station.length < 3) continue;
+      const key = station.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      stops.push({ station, walkMin: walk ? Number(walk[1]) : undefined });
+      if (stops.length >= 4) break;
+    }
+    return stops;
   }
 
   /** Pull a clean street address from the owner's free-text description. */
@@ -473,6 +518,14 @@ export class BnovoClient implements PmsConnector {
     const entry = rooms.get(String(propertyId));
     if (!entry) return [];
     return (await this.presentation(String(entry.roomTypeId))).photos;
+  }
+
+  /** Nearby metro stops for a room (by room_id), from its description. */
+  async getMetro(propertyId: string): Promise<MetroStop[]> {
+    const rooms = await this.rooms();
+    const entry = rooms.get(String(propertyId));
+    if (!entry) return [];
+    return (await this.presentation(String(entry.roomTypeId))).metro ?? [];
   }
 
   /**
@@ -665,6 +718,10 @@ export class BnovoClient implements PmsConnector {
     const rows = ids.map((id) => {
       const title = rooms.get(id) ?? id;
       const restriction = lookup(id, title, prices.resByTypeId, prices.resByLabel);
+      // Metro stops from the warm presentation cache (enrichAddresses ran in
+      // listProperties above) — no extra request. Used for metro search + captions.
+      const typeId = dict.get(id)?.roomTypeId;
+      const metro = typeId != null ? this.presCache.get(String(typeId))?.metro : undefined;
       return {
         propertyId: id,
         title,
@@ -675,6 +732,7 @@ export class BnovoClient implements PmsConnector {
         minStay: restriction?.minStay,
         maxStay: restriction?.maxStay,
         closedArrival: restriction?.closedArrival,
+        metro,
       };
     });
 

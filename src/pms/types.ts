@@ -37,6 +37,8 @@ export interface AvailabilityResult {
   maxStay?: number;
   /** True if arrival is closed on the requested check-in date. */
   closedArrival?: boolean;
+  /** Nearby metro stops parsed from the owner's description (for search + captions). */
+  metro?: Array<{ station: string; walkMin?: number }>;
 }
 
 export interface CreateBookingInput {
@@ -91,4 +93,6 @@ export interface PmsConnector {
   cancelBooking?(bookingId: string): Promise<boolean>;
   /** Full free-text listing description (amenities/rules), if the PMS has one. */
   getDescription?(propertyId: string): Promise<string | null>;
+  /** Nearby metro stops for a property, if the PMS/description exposes them. */
+  getMetro?(propertyId: string): Promise<Array<{ station: string; walkMin?: number }>>;
 }

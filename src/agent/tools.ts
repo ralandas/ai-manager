@@ -136,9 +136,14 @@ export function buildTools(deps: {
         const areaTokens = area
           ? area.replace(/[^a-zа-я0-9\s]/gi, ' ').split(/\s+/).filter((t) => t.length >= 2 && !['улица', 'проспект', 'переулок', 'дом', 'канала', 'набережная', 'остров', 'острова'].includes(t))
           : [];
-        const matchesArea = (title: string) => {
+        // Match the guest's area against the street address AND nearby metro
+        // stations (guests say "Площадь Александра Невского" = a metro, not a
+        // street). Tokens must all appear in title+metro text combined.
+        const matchesArea = (row: { title: string; metro?: Array<{ station: string }> }) => {
           if (areaTokens.length === 0) return true;
-          const tt = new Set(title.toLowerCase().replace(/[^a-zа-я0-9\s]/gi, ' ').split(/\s+/));
+          const hay = (row.title + ' ' + (row.metro?.map((s) => s.station).join(' ') ?? ''))
+            .toLowerCase().replace(/[^a-zа-я0-9\s]/gi, ' ');
+          const tt = new Set(hay.split(/\s+/));
           return areaTokens.every((t) => tt.has(t));
         };
         const applyFilters = (
@@ -149,6 +154,7 @@ export function buildTools(deps: {
             totalPrice?: number;
             capacity?: number;
             minStay?: number;
+            metro?: Array<{ station: string; walkMin?: number }>;
           }>,
         ) => {
           const nights = rows[0]?.nights;
@@ -176,9 +182,9 @@ export function buildTools(deps: {
           // apply the area filter (show the fund instead) and flag areaUnknown so
           // the note steers the model to ask for a street/metro.
           const areaHasDigit = area ? /\d/.test(area) : false;
-          const areaMatchesAny = area ? results.some((r) => matchesArea(r.title)) : true;
+          const areaMatchesAny = area ? results.some((r) => matchesArea(r)) : true;
           const areaUnknown = !!area && !areaMatchesAny && !areaHasDigit;
-          if (area && !areaUnknown) results = results.filter((r) => matchesArea(r.title));
+          if (area && !areaUnknown) results = results.filter((r) => matchesArea(r));
           if (maxPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice <= maxPrice);
           if (minPrice != null) results = results.filter((r) => r.totalPrice != null && r.totalPrice >= minPrice);
           // Per-night budget: compare against totalPrice / nights, so "до 10000
@@ -204,10 +210,10 @@ export function buildTools(deps: {
           // When the guest named a specific address, tell apart "занято" from
           // "нет такой": list matching rooms that exist but are busy on the dates.
           const busyAtArea = area
-            ? [...new Set(rows.filter((r) => !r.available && matchesArea(r.title)).map((r) => r.title))]
+            ? [...new Set(rows.filter((r) => !r.available && matchesArea(r)).map((r) => r.title))]
             : [];
           const existsAtArea = area
-            ? [...new Set(rows.filter((r) => matchesArea(r.title)).map((r) => r.title))]
+            ? [...new Set(rows.filter((r) => matchesArea(r)).map((r) => r.title))]
             : [];
           // A ready-made instruction for the model so it can't misread "занято"
           // as "нет такой" (deepseek sometimes does).
@@ -235,7 +241,7 @@ export function buildTools(deps: {
             // say so outright. Otherwise the empty-results branch above would
             // claim «такой квартиры нет», which is wrong and confusing.
             const namedTooSmall = area
-              ? [...new Set(tooSmall.filter((r) => matchesArea(r.title)).map((r) => r.title))]
+              ? [...new Set(tooSmall.filter((r) => matchesArea(r)).map((r) => r.title))]
               : [];
             note = namedTooSmall.length > 0
               ? `«${namedTooSmall.join(', ')}» НЕ вмещает ${guests} гостей (это точный ответ PMS, не «неизвестно»). Прямо скажи гостю, что на ${guests} гостей эта квартира не подходит, и предложи другую квартиру или меньше гостей. НЕ обещай «уточнить стоимость» — цены на такое размещение не существует, и повторный вызов инструмента ничего не изменит.`
@@ -679,9 +685,19 @@ export function buildTools(deps: {
           if (v) baseTitle = `${baseTitle}, вариант ${v}`;
           // Always put the price in the caption (Al's request).
           const price = priceById.get(id);
-          const caption = c
+          // Add the nearest metro so the guest can place the flat ("трудно понять
+          // что это и где" — Al). Best-effort: nearest by walk time, else first.
+          let metroTag = '';
+          if (pms.getMetro) {
+            try {
+              const stops = await pms.getMetro(id);
+              const nearest = [...stops].sort((a, b) => (a.walkMin ?? 99) - (b.walkMin ?? 99))[0];
+              if (nearest) metroTag = `\nм. ${nearest.station}${nearest.walkMin ? ` (${nearest.walkMin} мин пешком)` : ''}`;
+            } catch { /* ignore */ }
+          }
+          const caption = (c
             ? `${c.title}${c.price ? ` — ${c.price} ₽/ночь` : ''}`
-            : `${baseTitle}${price ? ` — ${price} ₽` : ''}`;
+            : `${baseTitle}${price ? ` — ${price} ₽` : ''}`) + metroTag;
           const sentCount = Math.min(urls.length, MAX_PER_APT);
           await messenger.sendPhotos(chatId, urls.slice(0, MAX_PER_APT), caption);
           logTranscript({ chatId, dir: 'out', kind: 'photo', text: caption, photoCount: sentCount });
