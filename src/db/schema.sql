@@ -43,3 +43,13 @@ CREATE TABLE IF NOT EXISTS apartment_photos (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_photos_apartment ON apartment_photos(apartment_id);
+
+-- Per-owner Telegram account config (api_id, api_hash, session, proxy, username, etc).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_config JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Per-owner agent settings (autonomy_enabled, llm_provider, owner_chat_id, etc).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS agent_config JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- Quick status flags so the cabinet can display connection state without probing.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tg_connected BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS agent_running BOOLEAN NOT NULL DEFAULT false;

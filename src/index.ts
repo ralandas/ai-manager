@@ -19,6 +19,10 @@ import { startPaymentWatcher } from './payment-watcher.js';
 import { registerFrontend } from './frontend/routes.js';
 import { registerAdminApi } from './frontend/admin-api.js';
 import { registerOwnerApi } from './api/apartments.js';
+import { registerProfileApi } from './api/profile.js';
+import { registerPmsConnectApi } from './api/pms-connect.js';
+import { registerTelegramConnectApi } from './api/telegram-connect.js';
+import { registerAgentControlApi } from './api/agent-control.js';
 
 async function main() {
   const app = Fastify({ logger: false });
@@ -58,6 +62,10 @@ async function main() {
   registerAdminApi(app, pms);
   // Multi-tenant owner API (auth + apartments CRUD, DB-backed).
   registerOwnerApi(app);
+  registerProfileApi(app);
+  registerPmsConnectApi(app);
+  registerTelegramConnectApi(app);
+  registerAgentControlApi(app);
 
   // Messenger needs the message handler, but the handler needs the messenger to
   // reply — resolve with a late-bound reference.
