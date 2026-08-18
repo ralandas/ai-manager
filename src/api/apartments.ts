@@ -57,7 +57,65 @@ export function registerOwnerApi(app: FastifyInstance): void {
         ON p.apartment_id = a.id
       WHERE a.owner_id = ${uid}
       ORDER BY a.created_at`;
-    return { apartments: rows };
+
+    if (rows.length > 0) {
+      return { apartments: rows, source: 'db' };
+    }
+
+    // If DB has no apartments, check if owner has a connected PMS (Bnovo/RC)
+    try {
+      const userRows = await sql<{ pms_provider: string }[]>`
+        SELECT pms_provider FROM users WHERE id = ${uid} LIMIT 1`;
+      if (userRows[0] && userRows[0].pms_provider !== 'stub') {
+        const { createPmsForOwner } = await import('../pms/for-owner.js');
+        const pms = await createPmsForOwner(uid);
+        const pmsProps = await pms.listProperties();
+        const mapped = pmsProps.map((p) => ({
+          id: p.id,
+          title: p.title,
+          address: p.title,
+          price: p.basePrice || null,
+          photo_count: 0,
+          from_pms: true,
+        }));
+        return { apartments: mapped, source: userRows[0].pms_provider };
+      }
+    } catch (err) {
+      logger.error({ uid, err }, 'Failed to fetch apartments from PMS fallback');
+    }
+
+    return { apartments: [], source: 'db' };
+  });
+
+  // --- Sync apartments from PMS into our database ---
+  app.post('/api/v2/apartments/sync', async (req, reply) => {
+    const uid = authUser(req, reply);
+    if (!uid) return;
+
+    try {
+      const { createPmsForOwner } = await import('../pms/for-owner.js');
+      const pms = await createPmsForOwner(uid);
+      const props = await pms.listProperties();
+
+      let syncedCount = 0;
+      for (const p of props) {
+        // Upsert by title or link
+        const existing = await sql`
+          SELECT id FROM apartments WHERE owner_id = ${uid} AND (rc_apartment_id = ${p.id} OR title = ${p.title}) LIMIT 1`;
+        if (existing.length === 0) {
+          await sql`
+            INSERT INTO apartments (owner_id, title, address, price, rc_apartment_id)
+            VALUES (${uid}, ${p.title}, ${p.title}, ${p.basePrice || null}, ${p.id})`;
+          syncedCount++;
+        }
+      }
+
+      logger.info({ uid, count: syncedCount }, 'Apartments synced from PMS');
+      return { ok: true, synced_count: syncedCount, total_count: props.length };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Sync failed';
+      return reply.code(400).send({ error: msg });
+    }
   });
 
   app.get<{ Params: { id: string } }>('/api/v2/apartments/:id', async (req, reply) => {

@@ -29,7 +29,17 @@ export async function createPmsForOwner(ownerId: string): Promise<PmsConnector> 
     return new StubPms();
   }
 
-  const c = row.pms_credentials ?? {};
+  let c: Record<string, unknown> = {};
+  if (typeof row.pms_credentials === 'string') {
+    try {
+      c = JSON.parse(row.pms_credentials);
+    } catch {
+      c = {};
+    }
+  } else if (row.pms_credentials && typeof row.pms_credentials === 'object') {
+    c = row.pms_credentials as Record<string, unknown>;
+  }
+
   let pms: PmsConnector;
   switch (row.pms_provider) {
     case 'realtycalendar':
