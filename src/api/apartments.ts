@@ -165,11 +165,55 @@ export function registerOwnerApi(app: FastifyInstance): void {
   app.get<{ Params: { id: string } }>('/api/v2/apartments/:id', async (req, reply) => {
     const uid = authUser(req, reply);
     if (!uid) return;
-    const rows = await sql`
-      SELECT * FROM apartments WHERE id = ${req.params.id} AND owner_id = ${uid} LIMIT 1`;
-    if (!rows.length) return reply.code(404).send({ error: 'not found' });
-    const photos = listPhotoFiles(req.params.id);
-    return { apartment: rows[0], photos };
+    // apartments.id is BIGSERIAL. A PMS-sourced card carries the PMS property id
+    // (e.g. a big Bnovo id) which never matches a DB row — guard the query so a
+    // non-integer id can't error, then fall through to the PMS lookup.
+    const isDbId = /^\d+$/.test(req.params.id);
+    const rows = isDbId
+      ? await sql`SELECT * FROM apartments WHERE id = ${req.params.id} AND owner_id = ${uid} LIMIT 1`
+      : [];
+    if (rows.length) {
+      const photos = listPhotoFiles(req.params.id);
+      return { apartment: rows[0], photos };
+    }
+
+    // Not in our DB — the list view falls back to live PMS cards (from_pms:true),
+    // so a click-through carries a PMS property id. Resolve it against the owner's
+    // PMS so opening such a card shows its data instead of a 404. These cards are
+    // not yet persisted; the UI can still save (creates a DB row) or the owner can
+    // "Импорт из PMS" first.
+    try {
+      const userRows = await sql<{ pms_provider: string }[]>`
+        SELECT pms_provider FROM users WHERE id = ${uid} LIMIT 1`;
+      if (userRows[0] && userRows[0].pms_provider !== 'stub') {
+        const { createPmsForOwner } = await import('../pms/for-owner.js');
+        const pms = await createPmsForOwner(uid);
+        const props = await pms.listProperties();
+        const p = props.find((x) => String(x.id) === String(req.params.id));
+        if (p) {
+          const photos = pms.getPhotos ? (await pms.getPhotos(p.id)) || [] : [];
+          const desc = pms.getDescription ? await pms.getDescription(p.id) : null;
+          const apartment = {
+            id: p.id,
+            title: p.title,
+            address: desc ? desc.slice(0, 200) : p.title,
+            price: p.basePrice || null,
+            rules: null,
+            checkin_instructions: null,
+            wifi_name: null,
+            wifi_password: null,
+            extra: desc ?? null,
+            rc_apartment_id: null,
+            from_pms: true,
+          };
+          return { apartment, photos };
+        }
+      }
+    } catch (err) {
+      logger.error({ uid, id: req.params.id, err }, 'apartment detail PMS fallback failed');
+    }
+
+    return reply.code(404).send({ error: 'not found' });
   });
 
   app.post<{ Body: ApartmentBody }>('/api/v2/apartments', async (req, reply) => {
