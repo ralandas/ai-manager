@@ -78,6 +78,40 @@ export interface Checkout {
   guestName: string;
 }
 
+export interface CalendarBookingItem {
+  id: string;
+  propertyId: string;
+  roomTypeId?: number;
+  guestName: string;
+  guestPhone?: string;
+  checkIn: string; // YYYY-MM-DD
+  checkOut: string; // YYYY-MM-DD
+  amount?: number;
+  status: string;
+  isPaid?: boolean;
+}
+
+export interface CalendarClosureItem {
+  propertyId: string;
+  checkIn: string;
+  checkOut: string;
+  reason?: string;
+}
+
+export interface CalendarData {
+  from: string;
+  to: string;
+  properties: Array<{
+    id: string;
+    title: string;
+    address?: string;
+    photos: string[];
+    price?: number;
+  }>;
+  bookings: CalendarBookingItem[];
+  closures: CalendarClosureItem[];
+}
+
 export interface PmsConnector {
   listProperties(): Promise<Property[]>;
   checkAvailability(q: AvailabilityQuery): Promise<AvailabilityResult[]>;
@@ -87,6 +121,8 @@ export interface PmsConnector {
   getCheckouts(isoDate: string): Promise<Checkout[]>;
   /** Photo URLs for a property, pulled from the PMS itself (optional). */
   getPhotos?(propertyId: string): Promise<string[]>;
+  /** Full calendar chessboard (bookings + closures + properties). */
+  getCalendarData?(from: string, to: string): Promise<CalendarData>;
   /** Whether the booking has any payment recorded (optional; PMS-specific). */
   isBookingPaid?(bookingId: string): Promise<boolean>;
   /** Cancel a booking (optional; PMS-specific). Returns true on success. */
@@ -96,3 +132,4 @@ export interface PmsConnector {
   /** Nearby metro stops for a property, if the PMS/description exposes them. */
   getMetro?(propertyId: string): Promise<Array<{ station: string; walkMin?: number }>>;
 }
+

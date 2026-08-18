@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
 import { sql } from '../db/index.js';
+import { logger } from '../logger.js';
 import { register, login, authUser } from '../auth/auth.js';
 import { savePhoto, deletePhoto, listPhotoFiles } from '../frontend/photos.js';
 
@@ -70,14 +71,23 @@ export function registerOwnerApi(app: FastifyInstance): void {
         const { createPmsForOwner } = await import('../pms/for-owner.js');
         const pms = await createPmsForOwner(uid);
         const pmsProps = await pms.listProperties();
-        const mapped = pmsProps.map((p) => ({
-          id: p.id,
-          title: p.title,
-          address: p.title,
-          price: p.basePrice || null,
-          photo_count: 0,
-          from_pms: true,
-        }));
+        
+        const mapped = await Promise.all(
+          pmsProps.map(async (p) => {
+            const photos = pms.getPhotos ? (await pms.getPhotos(p.id)) || [] : [];
+            const desc = pms.getDescription ? await pms.getDescription(p.id) : null;
+            return {
+              id: p.id,
+              title: p.title,
+              address: desc ? desc.slice(0, 100) : p.title,
+              price: p.basePrice || null,
+              photo_count: photos.length,
+              preview_photo: photos[0] || null,
+              photos: photos,
+              from_pms: true,
+            };
+          })
+        );
         return { apartments: mapped, source: userRows[0].pms_provider };
       }
     } catch (err) {
@@ -85,6 +95,40 @@ export function registerOwnerApi(app: FastifyInstance): void {
     }
 
     return { apartments: [], source: 'db' };
+  });
+
+  // --- Calendar chessboard API (PMS data) ---
+  app.get<{ Querystring: { from?: string; to?: string } }>('/api/v2/calendar', async (req, reply) => {
+    const uid = authUser(req, reply);
+    if (!uid) return;
+
+    try {
+      const userRows = await sql<{ pms_provider: string }[]>`
+        SELECT pms_provider FROM users WHERE id = ${uid} LIMIT 1`;
+      if (!userRows[0] || userRows[0].pms_provider === 'stub') {
+        return reply.code(400).send({ error: 'PMS не подключена. Подключите Bnovo или RealtyCalendar.' });
+      }
+
+      const now = new Date();
+      const defaultFrom = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+      const defaultTo = new Date(now.getFullYear(), now.getMonth() + 1, 15).toISOString().slice(0, 10);
+
+      const from = req.query.from || defaultFrom;
+      const to = req.query.to || defaultTo;
+
+      const { createPmsForOwner } = await import('../pms/for-owner.js');
+      const pms = await createPmsForOwner(uid);
+      if (!pms.getCalendarData) {
+        return reply.code(400).send({ error: 'Календарь не поддерживается текущим PMS коннектором' });
+      }
+
+      const calendar = await pms.getCalendarData(from, to);
+      return { ok: true, calendar };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Ошибка загрузки календаря';
+      logger.error({ uid, err }, 'Calendar fetch failed');
+      return reply.code(500).send({ error: msg });
+    }
   });
 
   // --- Sync apartments from PMS into our database ---

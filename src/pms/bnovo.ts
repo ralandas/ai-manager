@@ -1072,6 +1072,63 @@ export class BnovoClient implements PmsConnector {
     return m ? Number(m[1]) > 0 : false;
   }
 
+  async getCalendarData(from: string, to: string): Promise<import('./types.js').CalendarData> {
+    const [{ result, closures }, properties] = await Promise.all([
+      this.fetchBookings(from, to),
+      this.listProperties(),
+    ]);
+
+    // Attach photos for the properties
+    const propsWithPhotos = await Promise.all(
+      properties.map(async (p) => {
+        const photos = (await this.getPhotos(p.id)) || [];
+        const desc = await this.getDescription(p.id);
+        const address = this.parseAddress(desc ?? undefined) || p.title;
+        return {
+          id: p.id,
+          title: p.title,
+          address,
+          photos,
+          price: p.basePrice || undefined,
+        };
+      })
+    );
+
+    const bookings = result.map((b) => ({
+      id: b.booking_id,
+      propertyId: String(b.room_id),
+      roomTypeId: b.dual_roomtype_id ? Number(b.dual_roomtype_id) : undefined,
+      guestName: [b.surname, b.name].filter(Boolean).join(' ').trim() || 'Гость',
+      guestPhone: b.phone || undefined,
+      checkIn: this.isoDay(b.real_arrival),
+      checkOut: this.isoDay(b.real_departure),
+      amount: b.amount ? Number(b.amount) : undefined,
+      status: b.status_name || String(b.status_id),
+    }));
+
+    const closureItems = closures
+      .map((c) => {
+        const checkIn = this.ddmmyyyyToIso(c.date_from);
+        const checkOut = this.ddmmyyyyToIso(c.date_to);
+        if (!checkIn || !checkOut) return null;
+        return {
+          propertyId: String(c.room_id),
+          checkIn,
+          checkOut,
+          reason: c.reason || 'Закрыто',
+        };
+      })
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+
+    return {
+      from,
+      to,
+      properties: propsWithPhotos,
+      bookings,
+      closures: closureItems,
+    };
+  }
+
   async getCheckouts(isoDate: string): Promise<Checkout[]> {
     // Look at a small window around the date and keep departures on that day.
     const { result } = await this.fetchBookings(isoDate, this.fmt(new Date(Date.parse(isoDate) + DAY_MS)));
