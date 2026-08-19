@@ -65,6 +65,23 @@ function replySimilarity(a: string, b: string): number {
 const REPEAT_THRESHOLD = 0.45;
 
 /**
+ * Drop near-duplicate paragraphs inside one reply. Splits on blank lines (the
+ * model's usual paragraph break); keeps a paragraph only if it isn't a
+ * rephrasing of one already kept. Guards the "two identical questions in a row"
+ * stutter without touching genuinely distinct lines (e.g. a list of flats).
+ */
+function dedupeParagraphs(text: string): string {
+  const parts = text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return text;
+  const kept: string[] = [];
+  for (const p of parts) {
+    if (kept.some((k) => replySimilarity(k, p) >= REPEAT_THRESHOLD)) continue;
+    kept.push(p);
+  }
+  return kept.join('\n\n');
+}
+
+/**
  * The conversational agent. Per-chat history + session are PERSISTED to disk
  * (store/conversations.ts) so a process restart or crash keeps the dialog
  * context — otherwise the bot "forgets" and re-greets mid-conversation. Runs an
@@ -152,6 +169,12 @@ export class Agent {
         logger.warn({ chatId: msg.chatId }, 'agent: loop escalation not delivered — OWNER_CHAT_ID unset');
       }
     }
+
+    // Collapse near-duplicate paragraphs WITHIN this reply — the model sometimes
+    // asks the same thing twice ("свободно много, какое метро?" then "в центре
+    // много, какая станция?"), which reads as stuttering. Keep the first of any
+    // pair whose similarity clears the loop threshold.
+    reply = dedupeParagraphs(reply);
 
     history.push({ role: 'assistant', text: reply });
     // Persist trimmed history + session (session may hold lastBookingId).

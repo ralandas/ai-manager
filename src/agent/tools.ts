@@ -28,6 +28,9 @@ import {
 export interface AgentSession {
   /** Booking created in this conversation, if any. */
   lastBookingId?: string;
+  /** Photo keys (title|price) already sent in this chat — avoids re-sending the
+   *  same album when the model calls send_apartment_photos twice. */
+  sentPhotoKeys?: string[];
 }
 
 /**
@@ -124,6 +127,27 @@ export function buildTools(deps: {
       handler: async (a) => {
         const checkIn = a.checkIn as string;
         const checkOut = a.checkOut as string;
+        // Reject past dates up front: Bnovo will happily price any date, so the
+        // model used to sell e.g. May 2026 and only "notice" the dates were past
+        // at booking time. Cut it here so the funnel never starts on dead dates.
+        const today = new Date().toISOString().slice(0, 10);
+        if (checkIn && checkIn < today) {
+          return {
+            total: 0,
+            filtered: 0,
+            results: [],
+            datesInPast: true,
+            note: `Дата заезда ${checkIn} уже прошла (сегодня ${today}). Попроси гостя назвать актуальные даты — НЕ подбирай и не бронируй на прошедшие даты.`,
+          };
+        }
+        if (checkOut && checkOut <= checkIn) {
+          return {
+            total: 0,
+            filtered: 0,
+            results: [],
+            note: `Дата выезда ${checkOut} должна быть позже даты заезда ${checkIn}. Уточни даты у гостя.`,
+          };
+        }
         const guests = Number(a.guests);
         const area = a.area ? String(a.area).toLowerCase() : undefined;
         const maxPrice = a.maxPrice ? Number(a.maxPrice) : undefined;
@@ -616,14 +640,26 @@ export function buildTools(deps: {
 
         // Dedup by (address + price): several identical rooms at one address
         // (Рубинштейна 24 ×3 @8000) send once; genuinely different flats at the
-        // same address (Бронницкая 16 @10000 vs @13000) each stay.
+        // same address (Бронницкое 16 @10000 vs @13000) each stay.
+        // Also skip anything ALREADY sent earlier in this chat (session), so a
+        // repeated send_apartment_photos call doesn't spam the same album twice.
+        const alreadySent = new Set(session.sentPhotoKeys ?? []);
         const valid: string[] = [];
         const seenKey = new Set<string>();
+        const keyOf = (id: string) => `${titles.get(id)}|${priceById.get(id) ?? '?'}`;
         for (const id of forPhotos) {
-          const key = `${titles.get(id)}|${priceById.get(id) ?? '?'}`;
+          const key = keyOf(id);
           if (seenKey.has(key)) continue;
           seenKey.add(key);
+          if (alreadySent.has(key)) continue; // sent already in a prior turn
           valid.push(id);
+        }
+        // If everything requested was already sent, say so instead of resending.
+        if (valid.length === 0 && forPhotos.length > 0) {
+          return {
+            sent: [],
+            note: 'Фото этих квартир уже были отправлены в этом диалоге ранее — не отправляй повторно. Спроси, какую квартиру бронируем, или предложи другие варианты.',
+          };
         }
 
         // Keep the volume modest — fresh Telegram accounts have tight media
@@ -703,6 +739,13 @@ export function buildTools(deps: {
           logTranscript({ chatId, dir: 'out', kind: 'photo', text: caption, photoCount: sentCount });
           audit('send_apartment_photos', { chatId, propertyId: id, count: sentCount });
           results.push({ propertyId: id, sent: Math.min(urls.length, MAX_PER_APT) });
+        }
+
+        // Remember what we actually sent, so a later call in this chat skips it.
+        if (results.length) {
+          const sent = new Set(session.sentPhotoKeys ?? []);
+          for (const r of results) sent.add(keyOf(r.propertyId));
+          session.sentPhotoKeys = [...sent];
         }
 
         // Apartments beyond the per-request cap weren't sent — offer them next.
