@@ -93,9 +93,29 @@ export interface PmsTestResult {
 export interface TgStatus {
   connected: boolean;
   username: string | null;
+  first_name: string | null;
+  phone_masked: string | null;
   has_session: boolean;
-  has_proxy: boolean;
-  polling: boolean;
+  pending: {
+    phone_masked: string;
+    via_app: boolean;
+    need_password: boolean;
+  } | null;
+}
+
+export interface TgLoginStartResult {
+  ok: boolean;
+  phone_masked: string;
+  via_app: boolean;
+}
+
+export interface TgLoginConfirmResult {
+  ok: boolean;
+  need_password?: boolean;
+  hint?: string;
+  username?: string | null;
+  first_name?: string | null;
+  phone_masked?: string | null;
 }
 
 export interface AgentStatus {
@@ -289,41 +309,46 @@ export async function disconnectPms(token: string): Promise<void> {
 
 // --- Telegram ---
 
-export async function connectTelegram(
+export async function startTelegramLogin(
   token: string,
-  config: {
-    apiId: number;
-    apiHash: string;
-    session: string;
-    proxy?: string;
-    username?: string;
-    privateOnly?: boolean;
-    polling?: boolean;
-  },
-): Promise<{ ok: boolean; username: string | null }> {
-  const res = await fetch(`${BASE}/telegram/connect`, {
+  phone: string,
+): Promise<TgLoginStartResult> {
+  const res = await fetch(`${BASE}/telegram/login/start`, {
     method: 'POST',
     headers: auth(token),
-    body: JSON.stringify(config),
+    body: JSON.stringify({ phone }),
   });
   return jsonOrThrow(res);
 }
 
-export async function testTelegram(
+export async function confirmTelegramLogin(
   token: string,
-  config?: {
-    apiId: number;
-    apiHash: string;
-    session: string;
-    proxy?: string;
-  },
-): Promise<{ ok: boolean; authorized: boolean }> {
-  const res = await fetch(`${BASE}/telegram/test`, {
+  input: { code?: string; password?: string },
+): Promise<TgLoginConfirmResult> {
+  const res = await fetch(`${BASE}/telegram/login/confirm`, {
     method: 'POST',
     headers: auth(token),
-    body: JSON.stringify(config ?? {}),
+    body: JSON.stringify(input),
   });
   return jsonOrThrow(res);
+}
+
+export async function resendTelegramCode(token: string): Promise<TgLoginStartResult> {
+  const res = await fetch(`${BASE}/telegram/login/resend`, {
+    method: 'POST',
+    headers: auth(token),
+    body: JSON.stringify({}),
+  });
+  return jsonOrThrow(res);
+}
+
+export async function cancelTelegramLogin(token: string): Promise<void> {
+  const res = await fetch(`${BASE}/telegram/login/cancel`, {
+    method: 'POST',
+    headers: auth(token),
+    body: JSON.stringify({}),
+  });
+  await jsonOrThrow(res);
 }
 
 export async function getTelegramStatus(token: string): Promise<TgStatus> {
