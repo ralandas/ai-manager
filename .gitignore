@@ -45,3 +45,14 @@ logs2_metwork.txt
 
 # Bnovo raw reverse notes contain login/password — keep out of git
 knowledge/_bnovo_reverse.md
+
+# One-off reverse/debug scripts and local helpers — not part of the app
+audit_bnovo_deep.ts
+test_bnovo_endpoints.ts
+check_apts_samples.ts
+fix_utf8.js
+deploy_cal_cabinet.ps1
+
+# Client chat screenshots + pilot feedback dump — contain guest PII, keep out of git
+screenshits/
+test.txt
