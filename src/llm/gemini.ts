@@ -61,6 +61,7 @@ export class GeminiProvider implements LlmProvider {
       // Execute each tool and append a functionResponse part per call.
       const responseParts = await Promise.all(
         calls.map(async (c) => {
+          if (c.name) input.onToolCall?.(c.name);
           const tool = c.name ? toolIndex.get(c.name) : undefined;
           let output: unknown;
           try {

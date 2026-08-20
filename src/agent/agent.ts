@@ -132,6 +132,8 @@ export class Agent {
       turnMsgId: msg.providerMessageId,
     });
     const today = new Date().toISOString().slice(0, 10);
+    const calledTools: string[] = [];
+    const onToolCall = (name: string) => calledTools.push(name);
 
     let reply: string;
     try {
@@ -139,10 +141,33 @@ export class Agent {
         systemPrompt: systemPrompt(today),
         history,
         tools,
+        onToolCall,
       });
     } catch (err) {
       logger.error({ err, chatId: msg.chatId }, 'agent turn failed');
       reply = 'Извините, произошла техническая заминка. Попробуйте, пожалуйста, ещё раз.';
+    }
+
+    // "Сейчас проверю" without actually checking. The model sometimes ends a turn
+    // with a stub ("сейчас всё проверим", "минутку") but never calls
+    // check_availability — the guest then gets a promise and silence. If the
+    // reply promises action yet no availability tool ran this turn, re-run ONCE
+    // with an explicit nudge to call the tool now.
+    const promisedButIdle =
+      /сейчас.{0,6}(про|всё|все)|минут(у|ку|очку)|провер(ю|им|яю)|подожд/i.test(reply) &&
+      !calledTools.includes('check_availability');
+    if (promisedButIdle) {
+      logger.warn({ chatId: msg.chatId, reply }, 'agent: stub reply without check_availability — retrying');
+      history.push({
+        role: 'user',
+        text: '[система] Ты обещал показать варианты, но не вызвал check_availability. Вызови его сейчас с датами и числом гостей из диалога и покажи список квартир. Не спрашивай ничего лишнего.',
+      });
+      try {
+        reply = await this.llm.runTurn({ systemPrompt: systemPrompt(today), history, tools, onToolCall });
+      } catch (err) {
+        logger.error({ err, chatId: msg.chatId }, 'agent stub-retry failed');
+      }
+      history.pop(); // drop the synthetic nudge; keep real dialogue clean
     }
 
     // Stuck-loop guard. When a tool keeps returning the same non-answer (e.g.

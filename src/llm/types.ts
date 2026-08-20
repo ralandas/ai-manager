@@ -26,6 +26,9 @@ export interface LlmTurnInput {
   /** Prior turns, oldest first. */
   history: LlmMessage[];
   tools: ToolSchema[];
+  /** Called with each tool name as the provider invokes it, so the agent can
+   *  tell whether the turn actually did work (vs a "сейчас проверю" stub). */
+  onToolCall?: (name: string) => void;
 }
 
 export type LlmMessage =

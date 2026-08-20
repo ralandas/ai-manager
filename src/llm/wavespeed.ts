@@ -72,6 +72,7 @@ export class WaveSpeedProvider implements LlmProvider {
       // Echo the assistant's tool-call message, then one tool result per call.
       messages.push({ role: 'assistant', content: msg?.content ?? null, tool_calls: calls });
       for (const call of calls) {
+        input.onToolCall?.(call.function.name);
         const tool = toolIndex.get(call.function.name);
         let output: unknown;
         try {
